@@ -11,17 +11,18 @@ const TECH_DE = { s: "Slide", h: "Hammer-on", p: "Pull-off" };
 const ROLE_GAIN = { melody: 1.0, harmony: 0.55, bass: 0.85 };
 
 /* ---------- Zustand ---------- */
-const DEFAULTS = { bpm: 56, mode: "all", repeats: true, metro: false, countIn: true, showNext: true, showRing: true, names: true, muted: { melody:false, harmony:false, bass:false } };
+const DEFAULTS = { bpm: 56, mode: "all", repeats: true, metro: false, countIn: true, showNext: true, showRing: true, showLane: true, names: true, muted: { melody:false, harmony:false, bass:false } };
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem("gtt-settings") || "{}") || {}; } catch (e) { saved = {}; }
 const state = Object.assign({}, DEFAULTS, saved, { muted: Object.assign({}, DEFAULTS.muted, saved.muted || {}) });
 state.pos = 0;
 let song = SONGS[0];
 let seq = [], blocks = [], measureLock = 0;
+let seqStart = [], seqBar = [], seqTotal = 0, seqBars = 0, seqDirty = true;
 function persist() {
   try {
-    const { bpm, mode, repeats, metro, countIn, showNext, showRing, names, muted } = state;
-    localStorage.setItem("gtt-settings", JSON.stringify({ bpm, mode, repeats, metro, countIn, showNext, showRing, names, muted }));
+    const { bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted } = state;
+    localStorage.setItem("gtt-settings", JSON.stringify({ bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted }));
   } catch (e) {}
 }
 
@@ -40,8 +41,12 @@ function buildSeq() {
     blocks = [{ label: "T" + (measureLock + 1), sub: "Schleife" }];
   } else {
     bl.forEach((b, bi) => song.sections[b].measures.forEach(m => song.measures[m].forEach((ev, e) => s.push({ m, e, block: bi }))));
-    blocks = bl.map(b => { const ms = song.sections[b].measures; return { label: b, sub: "T " + (ms[0] + 1) + "–" + (ms[ms.length - 1] + 1) }; });
+    blocks = bl.map(b => { const ms = song.sections[b].measures; return { label: b, sec: b, sub: "T " + (ms[0] + 1) + "–" + (ms[ms.length - 1] + 1) }; });
   }
+  // Startzeit jedes Schritts in Achteln (für Spulleiste und Mitspiel-Leiste)
+  seqStart = []; seqBar = []; let x = 0, bar = 0;
+  s.forEach((r, i) => { seqStart[i] = x; if (r.e === 0) bar++; seqBar[i] = bar; x += song.measures[r.m][r.e].dur; });
+  seqTotal = x; seqBars = bar; seqDirty = true;
   return s;
 }
 function rebuildSeq() {
@@ -133,6 +138,7 @@ function playEvent(ev, t) {
 
 /* ---------- Abspiel-Engine ---------- */
 let playing = false, timer = null, raf = 0, nextIdx = 0, nextTime = 0, queue = [], endAt = null;
+let playStart = 0, posTime = 0;
 const eighth = () => 30 / state.bpm;
 
 function play(withCountIn = state.countIn) {
@@ -142,7 +148,8 @@ function play(withCountIn = state.countIn) {
   playing = true; queue = []; endAt = null; nextIdx = state.pos;
   let t = ctx.currentTime + 0.08;
   if (withCountIn) { const q = 2 * eighth(); for (let i = 0; i < song.beats; i++) click(t + i * q, i === 0); t += song.beats * q; }
-  nextTime = t;
+  else t += 0.1;
+  nextTime = t; playStart = t; posTime = t;
   scheduler(); timer = setInterval(scheduler, 25);
   raf = requestAnimationFrame(tick);
   updatePlayBtn();
@@ -164,8 +171,9 @@ function scheduler() {
 function tick() {
   if (!playing) return;
   const now = ctx.currentTime; let changed = false;
-  while (queue.length && queue[0].t <= now + 0.01) { state.pos = queue.shift().i; changed = true; }
+  while (queue.length && queue[0].t <= now + 0.01) { const q = queue.shift(); state.pos = q.i; posTime = q.t; changed = true; }
   if (changed) render();
+  drawFrame();
   if (endAt !== null && now >= endAt + 0.1) { stop(false); return; }
   raf = requestAnimationFrame(tick);
 }
@@ -173,6 +181,7 @@ function stop(kill = true) {
   playing = false; clearInterval(timer); cancelAnimationFrame(raf); queue = [];
   if (kill) killAll();
   updatePlayBtn();
+  drawFrame();
 }
 function toggle() { playing ? stop(true) : play(); }
 function restartIfPlaying(fn) { const was = playing; if (was) stop(true); fn(); render(); if (was) play(false); }
@@ -250,7 +259,7 @@ function buildBoard() {
     const x0 = f === 0 ? BX0 - 48 : fx(f - 1), x1 = f === 0 ? BX0 : fx(f);
     h += `<rect class="hit" data-s="${s}" data-f="${f}" x="${x0}" y="${sy(s) - SDY / 2}" width="${x1 - x0}" height="${SDY}" fill="transparent"><title>Saite ${s}, Bund ${f}: ${nameOf(TUNING[s - 1] + f)}</title></rect>`;
   }
-  h += `<g id="mkLayer" pointer-events="none"></g><g id="probeLayer" pointer-events="none"></g>`;
+  h += `<g id="mkLayer" pointer-events="none"></g><g id="apLayer" pointer-events="none"></g><g id="probeLayer" pointer-events="none"></g>`;
   board.innerHTML = h;
 }
 
@@ -292,6 +301,18 @@ function probe(s, f) {
   layer.appendChild(g);
   setTimeout(() => g.remove(), 900);
 }
+// Auf schmalen Bildschirmen das Griffbrett zu den aktuellen Tönen mitscrollen
+const boardScroll = document.getElementById("boardScroll");
+function followBoard(ev) {
+  const sw = boardScroll.scrollWidth, cw = boardScroll.clientWidth;
+  if (sw <= cw + 2) return;
+  const k = sw / 1200, xs = ev.notes.map(n => noteX(n.f) * k);
+  const lo = Math.min(...xs) - 50, hi = Math.max(...xs) + 70, sl = boardScroll.scrollLeft;
+  if (lo >= sl && hi <= sl + cw) return;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const target = hi - lo > cw ? lo : (lo + hi) / 2 - cw / 2;
+  boardScroll.scrollTo({ left: clamp(target, 0, sw - cw), behavior: reduce ? "auto" : "smooth" });
+}
 board.addEventListener("click", e => {
   const r = e.target.closest(".hit"); if (!r) return;
   probe(+r.dataset.s, +r.dataset.f);
@@ -300,9 +321,10 @@ board.addEventListener("click", e => {
 /* ---------- Tabulatur ---------- */
 const tabEl = document.getElementById("tab");
 let tabRefs = [], curTab = { m: -1, e: -1 };
+const TAB_PX = 36, TAB_PL = 34;
 function buildTab() {
-  tabEl.innerHTML = ""; tabRefs = [];
-  const PX = 36, PL = 34, PR = 16, TOP = 30, SP = 13, H = TOP + 5 * SP + 16;
+  tabEl.innerHTML = ""; tabRefs = []; curPh = null;
+  const PX = TAB_PX, PL = TAB_PL, PR = 16, TOP = 30, SP = 13, H = TOP + 5 * SP + 16;
   let out = "";
   song.measures.forEach((meas, mi) => {
     const W = PL + song.eighths * PX + PR;
@@ -335,11 +357,12 @@ function buildTab() {
     }));
     s += `<text class="mnum" x="${PL - 8}" y="13">${mi + 1}</text>`;
     if (isStart) s += `<text class="msec" x="${PL + 14}" y="13">TEIL ${sec} · ${song.sections[sec].key}</text>`;
+    s += `<line class="ph" x1="0" x2="0" y1="${TOP - 10}" y2="${yB + 10}" visibility="hidden"/>`;
     s += `</svg>`;
     out += s;
   });
   tabEl.innerHTML = out;
-  tabEl.querySelectorAll("svg.meas").forEach(svg => { tabRefs[+svg.dataset.m] = { svg, cols: [...svg.querySelectorAll(".col")] }; });
+  tabEl.querySelectorAll("svg.meas").forEach(svg => { tabRefs[+svg.dataset.m] = { svg, cols: [...svg.querySelectorAll(".col")], ph: svg.querySelector(".ph") }; });
   curTab = { m: -1, e: -1 };
 }
 tabEl.addEventListener("click", e => {
@@ -369,13 +392,234 @@ const posLabel = document.getElementById("posLabel"), nowNotes = document.getEle
 function render() {
   const ref = seq[state.pos], ev = evOf(ref);
   drawMarkers(ref, ev);
+  followBoard(ev);
   const beat = Math.floor(ev.pos / 2) + 1, off = ev.pos % 2;
   const beatTxt = off === 0 ? `Schlag ${beat}` : (off === 1 ? `Schlag ${beat} und` : `Schlag ${beat} (Zwischenton)`);
   posLabel.innerHTML = `Teil ${sectionOf(ref.m)} · Takt ${ref.m + 1} · ${beatTxt}<small>Schritt ${ref.e + 1} von ${song.measures[ref.m].length}</small>`;
   nowNotes.innerHTML = ev.notes.map(n => `<span class="nchip ${n.role}"><b>${nameOf(n.midi)}</b> Saite ${n.s} · Bund ${n.f}${n.tech ? ` <em>${TECH_DE[n.tech]}</em>` : ""}</span>`).join("");
   formChips.innerHTML = blocks.map((b, i) => `<button class="fchip${i === ref.block ? " cur" : (i < ref.block ? " done" : "")}" data-b="${i}" aria-label="Zu ${b.label} springen"><b>${b.label}</b><span>${b.sub}</span></button>`).join("");
   highlightTab(ref);
+  if (seqDirty) { buildSeek(); seqDirty = false; }
+  if (!playing) drawFrame();
 }
+
+/* ---------- Zeitachse: Mitspiel-Leiste, Spulleiste, Schläge ---------- */
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const fmtTime = sec => { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); };
+// aktuelle Position in Achteln (fliessend während der Wiedergabe, negativ beim Einzählen)
+function curX() {
+  const base = seqStart[state.pos];
+  if (!playing || !ctx) return base;
+  const now = ctx.currentTime;
+  if (now < playStart) return base - (playStart - now) / eighth();
+  return base + clamp((now - posTime) / eighth(), 0, evOf(seq[state.pos]).dur);
+}
+function drawFrame() {
+  if (!seq.length) return;
+  const cx = curX();
+  drawLane(cx); drawApproach(cx); updateBeats(cx); updatePlayhead(cx); updateSeek(cx);
+}
+
+// Mitspiel-Leiste (Canvas)
+const lane = $id("lane"), laneWrap = $id("laneWrap"), lctx = lane.getContext("2d");
+let laneW = 0, laneH = 0;
+function $id(id) { return document.getElementById(id); }
+function sizeLane() {
+  const r = lane.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  laneW = r.width; laneH = r.height;
+  lane.width = Math.round(r.width * dpr); lane.height = Math.round(r.height * dpr);
+  lctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+// Schritte rund um die aktuelle Position, bei Schleifen über das Ende hinaus fortgesetzt
+function eachVisible(cx, from, to, fn) {
+  const n = seq.length;
+  for (let k = state.pos - 12; k < state.pos + 80; k++) {
+    let idx = k, off = 0;
+    if (k < 0 || k >= n) { if (!isLoop()) continue; idx = ((k % n) + n) % n; off = Math.floor(k / n) * seqTotal; }
+    const start = seqStart[idx] + off, ev = evOf(seq[idx]);
+    if (start + ev.dur < from) continue;
+    if (start > to) break;
+    fn(ev, start, idx);
+  }
+}
+function drawLane(cx) {
+  if (!state.showLane || !laneW) return;
+  const g = lctx, W = laneW, H = laneH;
+  const top = 14, rowH = (H - top - 12) / 6, y = s => top + (s - 0.5) * rowH;
+  const PXE = W < 600 ? 30 : 46, hitX = W < 600 ? 66 : 96, gutter = 30;
+  const rad = Math.min(11, rowH * 0.46);
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = "#241810"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "rgba(0,0,0,.22)"; g.fillRect(gutter, 0, hitX - gutter, H);
+  const from = cx - (hitX - gutter) / PXE, to = cx + (W - hitX) / PXE;
+  // Schlag- und Taktlinien
+  const E = song.eighths;
+  for (let e = Math.ceil(from); e <= to; e++) {
+    if (e % 2 !== 0) continue;
+    const x = hitX + (e - cx) * PXE, bar = ((e % E) + E) % E === 0;
+    g.strokeStyle = bar ? "rgba(233,223,209,.38)" : "rgba(233,223,209,.10)";
+    g.lineWidth = bar ? 1.5 : 1;
+    g.beginPath(); g.moveTo(x, 6); g.lineTo(x, H - 6); g.stroke();
+  }
+  // Saiten
+  const sc = ["#ece4d8", "#e4dacb", "#dbd0bf", "#c9a35d", "#c39a52", "#b98f47"];
+  g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
+  for (let s = 1; s <= 6; s++) {
+    g.strokeStyle = sc[s - 1]; g.globalAlpha = .45; g.lineWidth = 0.8 + s * 0.25;
+    g.beginPath(); g.moveTo(gutter, y(s)); g.lineTo(W, y(s)); g.stroke();
+    g.globalAlpha = 1; g.fillStyle = "#bfb2a2"; g.fillText("eBGDAE"[s - 1], 14, y(s));
+  }
+  // Töne (nicht über die Saitenbeschriftung zeichnen)
+  g.save(); g.beginPath(); g.rect(gutter, 0, W - gutter, H); g.clip();
+  let flash = 0;
+  eachVisible(cx, from - 1, to + 1, (ev, start) => {
+    const x = hitX + (start - cx) * PXE, past = start + ev.dur <= cx, act = start <= cx && cx < start + ev.dur;
+    const d = start - cx; if (d > -0.35 && d < 0.35) flash = Math.max(flash, 1 - Math.abs(d) / 0.35);
+    ev.notes.forEach(n => {
+      const c = BOARD_ROLE[n.role], yy = y(n.s), muted = state.muted[n.role];
+      g.globalAlpha = (past ? 0.28 : 1) * (muted ? 0.35 : 1);
+      const tail = Math.max(0, ev.dur * PXE - rad - 4);
+      if (tail > 0) { g.fillStyle = c; g.globalAlpha *= 0.45; g.fillRect(x, yy - 3, tail + rad, 6); g.globalAlpha = (past ? 0.28 : 1) * (muted ? 0.35 : 1); }
+      g.beginPath(); g.arc(x, yy, act ? rad + 1.5 : rad, 0, Math.PI * 2);
+      g.fillStyle = c; g.fill();
+      if (act) { g.lineWidth = 2; g.strokeStyle = "#fbf6ee"; g.stroke(); }
+      g.fillStyle = "#fff"; g.fillText(String(n.f), x, yy + 0.5);
+      if (n.tech) { g.fillStyle = "#e9dfd1"; g.font = "italic 600 10px 'Instrument Sans', system-ui"; g.fillText(n.tech, x - rad - 5, yy - rad + 1); g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; }
+    });
+    g.globalAlpha = 1;
+  });
+  g.restore();
+  // Spiellinie
+  g.strokeStyle = "#f6ede1"; g.lineWidth = 2 + flash * 2;
+  g.shadowColor = "#e27c52"; g.shadowBlur = 4 + flash * 16;
+  g.beginPath(); g.moveTo(hitX, 4); g.lineTo(hitX, H - 4); g.stroke();
+  g.shadowBlur = 0;
+  // Einzählen
+  if (playing && cx < seqStart[state.pos]) {
+    const left = Math.ceil((seqStart[state.pos] - cx) / 2 - 1e-6);
+    g.fillStyle = "rgba(0,0,0,.55)"; g.fillRect(gutter, 0, hitX - gutter - 1, H);
+    g.fillStyle = "#f6ede1"; g.font = "600 40px 'Cormorant Garamond', Georgia, serif";
+    g.fillText(String(left), (gutter + hitX) / 2, H / 2);
+  }
+}
+
+// Ringe auf dem Griffbrett, die sich bis zum Anschlag zusammenziehen
+function drawApproach(cx) {
+  const layer = $id("apLayer"); if (!layer) return;
+  if (!playing) { layer.innerHTML = ""; return; }
+  let h = "";
+  eachVisible(cx, cx + 0.001, cx + 2, (ev, start) => {
+    if (start <= cx) return;
+    const p = clamp((start - cx) / 2, 0, 1);
+    ev.notes.forEach(n => {
+      if (state.muted[n.role]) return;
+      h += `<circle cx="${noteX(n.f)}" cy="${sy(n.s)}" r="${(16 + 26 * p).toFixed(1)}" fill="none" stroke="${BOARD_ROLE[n.role]}" stroke-width="${(3.5 - p * 1.5).toFixed(2)}" opacity="${(1 - p * 0.75).toFixed(2)}"/>`;
+    });
+  });
+  layer.innerHTML = h;
+}
+
+// Schlaganzeige
+const beatsEl = $id("beats"); let beatsKey = "";
+function updateBeats(cx) {
+  const ci = playing && cx < seqStart[state.pos];
+  let b;
+  if (ci) b = song.beats - Math.ceil((seqStart[state.pos] - cx) / 2 - 1e-6);
+  else { const m0 = seqStart[state.pos] - evOf(seq[state.pos]).pos; b = Math.floor((cx - m0) / 2 + 1e-6); }
+  const key = song.beats + "|" + b + "|" + ci + "|" + playing;
+  if (key === beatsKey) return; beatsKey = key;
+  let h = "";
+  for (let i = 0; i < song.beats; i++) h += `<i class="${i === b ? "on" : ""}${i === 0 ? " one" : ""}"></i>`;
+  h += `<span>${ci ? "Einzählen" : "Schlag " + (b + 1) + " von " + song.beats}</span>`;
+  beatsEl.innerHTML = h;
+  beatsEl.classList.toggle("ci", ci);
+}
+
+// mitlaufender Strich in der Tabulatur
+let curPh = null;
+function updatePlayhead(cx) {
+  if (curPh) curPh.setAttribute("visibility", "hidden");
+  curPh = null;
+  if (!playing || cx < seqStart[state.pos]) return;
+  const ref = seq[state.pos], t = tabRefs[ref.m]; if (!t) return;
+  const xin = clamp(evOf(ref).pos + (cx - seqStart[state.pos]), 0, song.eighths);
+  const x = TAB_PL + xin * TAB_PX;
+  t.ph.setAttribute("x1", x); t.ph.setAttribute("x2", x); t.ph.setAttribute("visibility", "visible");
+  curPh = t.ph;
+}
+
+// Spulleiste
+const seek = $id("seek"), seekTrack = $id("seekTrack"), seekFill = $id("seekFill"), seekThumb = $id("seekThumb"), seekBubble = $id("seekBubble");
+function buildSeek() {
+  let h = "";
+  blocks.forEach((b, bi) => {
+    const first = seq.findIndex(r => r.block === bi);
+    const nextFirst = seq.findIndex(r => r.block === bi + 1);
+    const a = seqStart[first], e = nextFirst < 0 ? seqTotal : seqStart[nextFirst];
+    const cls = b.sec === "B" ? "b" : "a";
+    h += `<div class="sseg ${cls}" style="left:${a / seqTotal * 100}%;width:${(e - a) / seqTotal * 100}%"><span>${b.label}</span></div>`;
+  });
+  seq.forEach((r, i) => { if (i > 0 && r.e === 0) h += `<i class="stick" style="left:${seqStart[i] / seqTotal * 100}%"></i>`; });
+  seekTrack.innerHTML = h;
+  seek.setAttribute("aria-valuemax", String(seqBars));
+}
+function updateSeek(cx) {
+  const f = clamp(cx / seqTotal, 0, 1) * 100;
+  seekFill.style.width = f + "%"; seekThumb.style.left = f + "%";
+  $id("tNow").textContent = fmtTime(Math.max(0, cx) * eighth());
+  $id("tTotal").textContent = fmtTime(seqTotal * eighth());
+  const ref = seq[state.pos];
+  $id("mNow").textContent = `Takt ${seqBar[state.pos]} von ${seqBars} · Teil ${sectionOf(ref.m)}`;
+  seek.setAttribute("aria-valuenow", String(seqBar[state.pos]));
+  seek.setAttribute("aria-valuetext", `Takt ${seqBar[state.pos]} von ${seqBars}`);
+}
+function idxAtClient(clientX) {
+  const r = seek.getBoundingClientRect();
+  const x = clamp((clientX - r.left) / r.width, 0, 1) * seqTotal;
+  let i = 0; while (i + 1 < seq.length && seqStart[i + 1] <= x + 1e-9) i++;
+  return { i, frac: clamp((clientX - r.left) / r.width, 0, 1) };
+}
+function showBubble(clientX) {
+  const { i, frac } = idxAtClient(clientX), ref = seq[i];
+  seekBubble.hidden = false;
+  seekBubble.style.left = (frac * 100) + "%";
+  seekBubble.textContent = `Takt ${ref.m + 1} · Teil ${sectionOf(ref.m)} · ${fmtTime(seqStart[i] * eighth())}`;
+}
+let seekDrag = null;
+seek.addEventListener("pointerdown", e => {
+  if (e.button !== undefined && e.button !== 0) return;
+  e.preventDefault(); seek.focus({ preventScroll: true });
+  try { seek.setPointerCapture(e.pointerId); } catch (err) {}
+  seekDrag = { was: playing }; if (playing) stop(true);
+  const { i } = idxAtClient(e.clientX); state.pos = i; render(); showBubble(e.clientX);
+});
+seek.addEventListener("pointermove", e => {
+  showBubble(e.clientX);
+  if (!seekDrag) return;
+  const { i } = idxAtClient(e.clientX);
+  if (i !== state.pos) { state.pos = i; render(); }
+});
+const endDrag = () => {
+  if (!seekDrag) return;
+  const was = seekDrag.was; seekDrag = null;
+  if (was) play(false); else previewCurrent();
+};
+seek.addEventListener("pointerup", e => { endDrag(); if (e.pointerType !== "mouse") seekBubble.hidden = true; });
+seek.addEventListener("pointercancel", () => { seekDrag = null; seekBubble.hidden = true; });
+seek.addEventListener("pointerleave", () => { if (!seekDrag) seekBubble.hidden = true; });
+function jumpBar(d) {
+  restartIfPlaying(() => {
+    const n = seq.length;
+    if (d > 0) { let i = state.pos + 1; while (i < n && seq[i].e !== 0) i++; state.pos = i < n ? i : (isLoop() ? 0 : state.pos); }
+    else {
+      let i = state.pos; while (i > 0 && seq[i].e !== 0) i--;
+      if (i === state.pos && i > 0) { i--; while (i > 0 && seq[i].e !== 0) i--; }
+      state.pos = i;
+    }
+  });
+  if (!playing) previewCurrent();
+}
+window.addEventListener("resize", () => { sizeLane(); drawFrame(); });
 formChips.addEventListener("click", e => {
   const b = e.target.closest(".fchip"); if (!b) return;
   const bi = +b.dataset.b;
@@ -396,6 +640,7 @@ function setBpm(v) {
   $("bpmOut").textContent = `♩ = ${state.bpm}`;
   $("pct").textContent = `${Math.round(state.bpm / song.refBpm * 100)} % vom Originaltempo (♩ ≈ ${song.refBpm})`;
   persist();
+  if (!playing) drawFrame();
 }
 bPlay.addEventListener("click", toggle);
 $("bPrev").addEventListener("click", () => step(-1));
@@ -415,6 +660,7 @@ const bindToggle = (id, key, after) => {
 bindToggle("tRepeats", "repeats", () => restartIfPlaying(() => { rebuildSeq(); buildTab(); }));
 bindToggle("tMetro", "metro", () => {});
 bindToggle("tCount", "countIn", () => {});
+bindToggle("tLane", "showLane", () => { laneWrap.hidden = !state.showLane; sizeLane(); drawFrame(); });
 bindToggle("tNext", "showNext");
 bindToggle("tRing", "showRing");
 bindToggle("tNames", "names");
@@ -432,6 +678,8 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
   else if (e.key === "ArrowUp") { e.preventDefault(); setBpm(state.bpm + 2); }
   else if (e.key === "ArrowDown") { e.preventDefault(); setBpm(state.bpm - 2); }
+  else if (e.key === "PageDown") { e.preventDefault(); jumpBar(1); }
+  else if (e.key === "PageUp") { e.preventDefault(); jumpBar(-1); }
   else if (e.key === "Home") { e.preventDefault(); restartIfPlaying(() => { state.pos = 0; }); }
 });
 
@@ -445,8 +693,10 @@ function loadSong(s) {
   modeSel.value = state.mode;
   if (state.mode === "measure") measureLock = 0;
   state.pos = 0; seq = buildSeq();
-  buildBoard(); buildTab(); render();
+  laneWrap.hidden = !state.showLane;
+  buildBoard(); buildTab(); sizeLane(); render();
 }
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => drawFrame());
 const songSel = $("songSel");
 songSel.innerHTML = SONGS.map(s => `<option value="${s.id}">${s.title}</option>`).join("") + `<option disabled>Weitere Stücke folgen</option>`;
 songSel.addEventListener("change", () => { stop(true); loadSong(SONGS.find(s => s.id === songSel.value)); });

@@ -35,8 +35,12 @@
       </div>
     </div>
     <div class="board-scroll" id="boardScroll"><svg id="board" viewBox="0 0 1200 322" aria-label="Gitarrengriffbrett mit den aktuellen Tönen"></svg></div>
+    <div class="lane-wrap" id="laneWrap">
+      <canvas id="lane" aria-label="Mitspiel-Leiste: Töne laufen von rechts auf die Spiellinie zu. Wenn ein Ton die Linie erreicht, spielst du ihn."></canvas>
+    </div>
     <div class="now">
       <div style="min-width:0">
+        <div class="beats" id="beats" aria-hidden="true"></div>
         <div class="pos" id="posLabel" aria-live="polite"></div>
         <div class="notes" id="nowNotes"></div>
       </div>
@@ -45,6 +49,15 @@
   </section>
 
   <section class="card transport" aria-label="Wiedergabe">
+    <div class="seekwrap">
+      <div class="seek" id="seek" role="slider" tabindex="0" aria-label="Position im Stück" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="strack" id="seekTrack"></div>
+        <div class="sfill" id="seekFill"></div>
+        <div class="sthumb" id="seekThumb"></div>
+        <div class="sbubble" id="seekBubble" hidden></div>
+      </div>
+      <div class="smeta"><span id="tNow">0:00</span><span id="mNow"></span><span id="tTotal">0:00</span></div>
+    </div>
     <div class="btns">
       <button class="btn" id="bStart" aria-label="Zum Anfang" title="Zum Anfang (Pos1)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
       <button class="btn" id="bPrev" aria-label="Schritt zurück" title="Schritt zurück (←)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -69,6 +82,7 @@
       <label class="tg"><input type="checkbox" id="tRepeats" checked><span class="tr"></span>Wiederholungen</label>
       <label class="tg"><input type="checkbox" id="tMetro"><span class="tr"></span>Metronom</label>
       <label class="tg"><input type="checkbox" id="tCount" checked><span class="tr"></span>Einzählen</label>
+      <label class="tg"><input type="checkbox" id="tLane" checked><span class="tr"></span>Mitspiel-Leiste</label>
       <label class="tg"><input type="checkbox" id="tNext" checked><span class="tr"></span>Nächsten Griff zeigen</label>
       <label class="tg"><input type="checkbox" id="tRing" checked><span class="tr"></span>Klingende Töne zeigen</label>
       <label class="tg"><input type="checkbox" id="tNames" checked><span class="tr"></span>Tonnamen</label>
@@ -85,6 +99,7 @@
   <footer class="keys">
     <span><kbd>Leertaste</kbd> Abspielen / Pause</span>
     <span><kbd>←</kbd> <kbd>→</kbd> Schritt für Schritt</span>
+    <span><kbd>Bild ↑</kbd> <kbd>Bild ↓</kbd> Takt zurück / vor</span>
     <span><kbd>↑</kbd> <kbd>↓</kbd> Tempo</span>
     <span><kbd>Pos1</kbd> Zum Anfang</span>
   </footer>
