@@ -38,6 +38,20 @@
     <div class="lane-wrap" id="laneWrap">
       <canvas id="lane" aria-label="Mitspiel-Leiste: Töne laufen von rechts auf die Spiellinie zu. Wenn ein Ton die Linie erreicht, spielst du ihn."></canvas>
     </div>
+    <div class="listen" id="listenBar" hidden>
+      <div class="lhead">
+        <span class="lmic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg><span id="lStatus">Hört zu</span></span>
+        <span class="lstreak" id="lStreak"></span>
+      </div>
+      <div class="lgrid">
+        <div><div class="lcap">Spiel jetzt</div><div class="lbig" id="lTarget">–</div><div class="lsub" id="lTargetSub"></div></div>
+        <div><div class="lcap">Gehört</div><div class="lbig" id="lHeard">–</div><div class="lsub" id="lCents"></div></div>
+        <div class="lmeterwrap"><div class="lcap">Lautstärke</div><div class="lmeter"><i id="lLevel"></i><b id="lThr"></b></div>
+          <label class="lsens" for="lSens">Empfindlichkeit <input type="range" id="lSens" min="1" max="10" value="6"></label></div>
+        <div class="lacts"><button class="lbtn" id="lSkip" type="button">Überspringen</button></div>
+      </div>
+      <div class="lmsg" id="lMsg" hidden></div>
+    </div>
     <div class="now">
       <div style="min-width:0">
         <div class="beats" id="beats" aria-hidden="true"></div>
@@ -79,6 +93,7 @@
       </select>
     </label>
     <div class="toggles">
+      <label class="tg tg-listen"><input type="checkbox" id="tListen"><span class="tr"></span>Mithören: wartet, bis du den Ton spielst</label>
       <label class="tg"><input type="checkbox" id="tRepeats" checked><span class="tr"></span>Wiederholungen</label>
       <label class="tg"><input type="checkbox" id="tMetro"><span class="tr"></span>Metronom</label>
       <label class="tg"><input type="checkbox" id="tCount" checked><span class="tr"></span>Einzählen</label>

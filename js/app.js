@@ -11,9 +11,10 @@ const TECH_DE = { s: "Slide", h: "Hammer-on", p: "Pull-off" };
 const ROLE_GAIN = { melody: 1.0, harmony: 0.55, bass: 0.85 };
 
 /* ---------- Zustand ---------- */
-const DEFAULTS = { bpm: 56, mode: "all", repeats: true, metro: false, countIn: true, showNext: true, showRing: true, showLane: true, names: true, muted: { melody:false, harmony:false, bass:false } };
+const DEFAULTS = { bpm: 56, mode: "all", repeats: true, metro: false, countIn: true, showNext: true, showRing: true, showLane: false, names: true, muted: { melody:false, harmony:false, bass:false } };
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem("gtt-settings") || "{}") || {}; } catch (e) { saved = {}; }
+if (saved.v !== 2) delete saved.showLane;   // Mitspiel-Leiste ist neu standardmässig aus
 const state = Object.assign({}, DEFAULTS, saved, { muted: Object.assign({}, DEFAULTS.muted, saved.muted || {}) });
 state.pos = 0;
 let song = SONGS[0];
@@ -22,7 +23,7 @@ let seqStart = [], seqBar = [], seqTotal = 0, seqBars = 0, seqDirty = true;
 function persist() {
   try {
     const { bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted } = state;
-    localStorage.setItem("gtt-settings", JSON.stringify({ bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted }));
+    localStorage.setItem("gtt-settings", JSON.stringify({ v: 2, bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted }));
   } catch (e) {}
 }
 
@@ -108,7 +109,9 @@ function ksBuf(midi) {
   bufCache.set(midi, out);
   return out;
 }
+let lastOwnSound = -1e9;   // eigene Töne nicht als Spiel des Nutzers erkennen
 function playNote(s, midi, t, gain, legato) {
+  lastOwnSound = Math.max(lastOwnSound, performance.now() + (t - ctx.currentTime) * 1000);
   const { buf, rate } = ksBuf(midi);
   const src = ctx.createBufferSource(); src.buffer = buf; src.playbackRate.value = rate;
   const g = ctx.createGain(); const a = gain * (legato ? 0.6 : 1);
@@ -142,6 +145,7 @@ let playStart = 0, posTime = 0;
 const eighth = () => 30 / state.bpm;
 
 function play(withCountIn = state.countIn) {
+  if (listen.on) stopListening();
   ensureAudio();
   if (playing) return;
   if (!isLoop() && state.pos >= seq.length - 1) state.pos = 0;
@@ -181,11 +185,11 @@ function stop(kill = true) {
   playing = false; clearInterval(timer); cancelAnimationFrame(raf); queue = [];
   if (kill) killAll();
   updatePlayBtn();
-  drawFrame();
+  drawFrame(); savePos();
 }
 function toggle() { playing ? stop(true) : play(); }
 function restartIfPlaying(fn) { const was = playing; if (was) stop(true); fn(); render(); if (was) play(false); }
-function previewCurrent() { ensureAudio(); playEvent(evOf(seq[state.pos]), ctx.currentTime + 0.01); }
+function previewCurrent() { if (listen.on) return; ensureAudio(); playEvent(evOf(seq[state.pos]), ctx.currentTime + 0.01); }
 function step(d) {
   if (playing) stop(true);
   state.pos = (state.pos + d + seq.length) % seq.length;
@@ -400,14 +404,29 @@ function render() {
   formChips.innerHTML = blocks.map((b, i) => `<button class="fchip${i === ref.block ? " cur" : (i < ref.block ? " done" : "")}" data-b="${i}" aria-label="Zu ${b.label} springen"><b>${b.label}</b><span>${b.sub}</span></button>`).join("");
   highlightTab(ref);
   if (seqDirty) { buildSeek(); seqDirty = false; }
-  if (!playing) drawFrame();
+  if (!playing) { drawFrame(); savePos(); }
+  if (listen.on) listenTarget();
+}
+function savePos() {
+  const r = seq[state.pos]; if (!r) return;
+  try { localStorage.setItem("gtt-pos-" + song.id, JSON.stringify({ m: r.m, e: r.e, block: r.block, mode: state.mode })); } catch (e) {}
+}
+function restorePos() {
+  try {
+    const p = JSON.parse(localStorage.getItem("gtt-pos-" + song.id) || "null");
+    if (!p || p.mode !== state.mode) return;
+    const i = seq.findIndex(r => r.m === p.m && r.e === p.e && r.block === p.block);
+    if (i >= 0) state.pos = i;
+  } catch (e) {}
 }
 
 /* ---------- Zeitachse: Mitspiel-Leiste, Spulleiste, Schläge ---------- */
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const fmtTime = sec => { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); };
 // aktuelle Position in Achteln (fliessend während der Wiedergabe, negativ beim Einzählen)
+let laneView = null;   // freie Position beim Ziehen/Scrollen in der Mitspiel-Leiste
 function curX() {
+  if (laneView !== null) return laneView;
   const base = seqStart[state.pos];
   if (!playing || !ctx) return base;
   const now = ctx.currentTime;
@@ -446,8 +465,9 @@ function drawLane(cx) {
   if (!state.showLane || !laneW) return;
   const g = lctx, W = laneW, H = laneH;
   const top = 14, rowH = (H - top - 12) / 6, y = s => top + (s - 0.5) * rowH;
-  const PXE = W < 600 ? 30 : 46, hitX = W < 600 ? 66 : 96, gutter = 30;
-  const rad = Math.min(11, rowH * 0.46);
+  const PXE = W < 600 ? 42 : 50, hitX = W < 600 ? 72 : 100, gutter = 30;
+  // Radius so wählen, dass sich auch schnelle Töne (Sechzehntel) nicht überlappen
+  const rad = Math.min(11, rowH * 0.46, (0.5 * PXE - 3) / 2);
   g.clearRect(0, 0, W, H);
   g.fillStyle = "#241810"; g.fillRect(0, 0, W, H);
   g.fillStyle = "rgba(0,0,0,.22)"; g.fillRect(gutter, 0, hitX - gutter, H);
@@ -469,37 +489,52 @@ function drawLane(cx) {
     g.beginPath(); g.moveTo(gutter, y(s)); g.lineTo(W, y(s)); g.stroke();
     g.globalAlpha = 1; g.fillStyle = "#bfb2a2"; g.fillText("eBGDAE"[s - 1], 14, y(s));
   }
-  // Töne (nicht über die Saitenbeschriftung zeichnen)
-  g.save(); g.beginPath(); g.rect(gutter, 0, W - gutter, H); g.clip();
-  let flash = 0;
+  // sichtbare Töne sammeln
+  const items = []; let flash = 0;
   eachVisible(cx, from - 1, to + 1, (ev, start) => {
-    const x = hitX + (start - cx) * PXE, past = start + ev.dur <= cx, act = start <= cx && cx < start + ev.dur;
     const d = start - cx; if (d > -0.35 && d < 0.35) flash = Math.max(flash, 1 - Math.abs(d) / 0.35);
-    ev.notes.forEach(n => {
-      const c = BOARD_ROLE[n.role], yy = y(n.s), muted = state.muted[n.role];
-      g.globalAlpha = (past ? 0.28 : 1) * (muted ? 0.35 : 1);
-      const tail = Math.max(0, ev.dur * PXE - rad - 4);
-      if (tail > 0) { g.fillStyle = c; g.globalAlpha *= 0.45; g.fillRect(x, yy - 3, tail + rad, 6); g.globalAlpha = (past ? 0.28 : 1) * (muted ? 0.35 : 1); }
-      g.beginPath(); g.arc(x, yy, act ? rad + 1.5 : rad, 0, Math.PI * 2);
-      g.fillStyle = c; g.fill();
-      if (act) { g.lineWidth = 2; g.strokeStyle = "#fbf6ee"; g.stroke(); }
-      g.fillStyle = "#fff"; g.fillText(String(n.f), x, yy + 0.5);
-      if (n.tech) { g.fillStyle = "#e9dfd1"; g.font = "italic 600 10px 'Instrument Sans', system-ui"; g.fillText(n.tech, x - rad - 5, yy - rad + 1); g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; }
-    });
-    g.globalAlpha = 1;
+    items.push({ ev, start, x: hitX + d * PXE, past: start + ev.dur <= cx, act: start <= cx && cx < start + ev.dur });
   });
-  g.restore();
-  // Spiellinie
-  g.strokeStyle = "#f6ede1"; g.lineWidth = 2 + flash * 2;
+  const counting = playing && cx < seqStart[state.pos];
+  // Einzähl-Abdunkelung und Spiellinie liegen HINTER den Tönen, damit keine Zahl verdeckt wird
+  if (counting) { g.fillStyle = "rgba(0,0,0,.5)"; g.fillRect(gutter, 0, hitX - gutter, H); }
+  g.strokeStyle = "rgba(246,237,225,.85)"; g.lineWidth = 2 + flash * 2;
   g.shadowColor = "#e27c52"; g.shadowBlur = 4 + flash * 16;
   g.beginPath(); g.moveTo(hitX, 4); g.lineTo(hitX, H - 4); g.stroke();
   g.shadowBlur = 0;
-  // Einzählen
-  if (playing && cx < seqStart[state.pos]) {
+  // Töne (nicht über die Saitenbeschriftung zeichnen)
+  g.save(); g.beginPath(); g.rect(gutter, 0, W - gutter, H); g.clip();
+  const alphaOf = (it, n) => (it.past ? 0.28 : 1) * (state.muted[n.role] ? 0.35 : 1);
+  // 1) alle Haltebalken zuerst, damit sie nie über einer Zahl liegen
+  items.forEach(it => it.ev.notes.forEach(n => {
+    const tail = it.ev.dur * PXE - rad - 4; if (tail <= 0) return;
+    g.globalAlpha = alphaOf(it, n) * 0.45; g.fillStyle = BOARD_ROLE[n.role];
+    g.fillRect(it.x, y(n.s) - 3, tail + rad, 6);
+  }));
+  // 2) Köpfe von spät nach früh: der Ton, der als Nächstes dran ist, liegt immer oben
+  const order = items.slice().reverse();
+  order.sort((a, b) => (a.act === b.act ? 0 : a.act ? 1 : -1));
+  g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
+  order.forEach(it => it.ev.notes.forEach(n => {
+    const yy = y(n.s), r = it.act ? rad + 1.5 : rad;
+    g.globalAlpha = alphaOf(it, n);
+    g.beginPath(); g.arc(it.x, yy, r, 0, Math.PI * 2);
+    g.fillStyle = BOARD_ROLE[n.role]; g.fill();
+    g.lineWidth = it.act ? 2.2 : 1.5; g.strokeStyle = it.act ? "#fbf6ee" : "#241810"; g.stroke();
+    g.fillStyle = "#fff"; g.fillText(String(n.f), it.x, yy + 0.5);
+    if (n.tech) { g.fillStyle = "#e9dfd1"; g.font = "italic 600 10px 'Instrument Sans', system-ui"; g.fillText(n.tech, it.x - r - 5, yy - r + 1); g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; }
+  }));
+  g.globalAlpha = 1;
+  g.restore();
+  if (!playing && laneView === null) {
+    g.fillStyle = "rgba(233,223,209,.45)"; g.font = "600 11px 'Instrument Sans', system-ui, sans-serif"; g.textAlign = "right";
+    g.fillText("← ziehen zum Spulen →", W - 10, 8); g.textAlign = "center";
+  }
+  // Einzähl-Zahl links neben der Spiellinie, ohne die Töne zu berühren
+  if (counting) {
     const left = Math.ceil((seqStart[state.pos] - cx) / 2 - 1e-6);
-    g.fillStyle = "rgba(0,0,0,.55)"; g.fillRect(gutter, 0, hitX - gutter - 1, H);
-    g.fillStyle = "#f6ede1"; g.font = "600 40px 'Cormorant Garamond', Georgia, serif";
-    g.fillText(String(left), (gutter + hitX) / 2, H / 2);
+    g.fillStyle = "#f6ede1"; g.font = "600 34px 'Cormorant Garamond', Georgia, serif";
+    g.fillText(String(left), (gutter + hitX - rad) / 2, H / 2);
   }
 }
 
@@ -620,6 +655,193 @@ function jumpBar(d) {
   if (!playing) previewCurrent();
 }
 window.addEventListener("resize", () => { sizeLane(); drawFrame(); });
+
+// Mitspiel-Leiste seitlich ziehen oder scrollen, um zu einer Stelle zu springen
+const lanePXE = () => (laneW < 600 ? 42 : 50), laneHitX = () => (laneW < 600 ? 72 : 100);
+function idxContaining(x) { let i = 0; while (i + 1 < seq.length && seqStart[i + 1] <= x + 1e-9) i++; return i; }
+function idxNearest(x) { const i = idxContaining(x); return (i + 1 < seq.length && seqStart[i + 1] - x < x - seqStart[i]) ? i + 1 : i; }
+function laneMoveTo(v) {
+  laneView = clamp(v, 0, seqTotal - 0.01);
+  const i = idxContaining(laneView);
+  if (i !== state.pos) { state.pos = i; render(); } else drawFrame();
+}
+function laneSettle(resume) {
+  if (laneView === null) return;
+  state.pos = idxNearest(laneView); laneView = null; render();
+  if (resume) play(false); else previewCurrent();
+}
+let laneDrag = null, wheelTimer = 0, wheelWas = false;
+lane.addEventListener("pointerdown", e => {
+  if (e.button !== undefined && e.button !== 0) return;
+  try { lane.setPointerCapture(e.pointerId); } catch (err) {}
+  laneDrag = { x0: e.clientX, v0: curX(), was: playing, moved: false };
+  if (playing) stop(true);
+  lane.classList.add("dragging");
+});
+lane.addEventListener("pointermove", e => {
+  if (!laneDrag) return;
+  const dx = e.clientX - laneDrag.x0;
+  if (!laneDrag.moved && Math.abs(dx) < 4) return;
+  laneDrag.moved = true;
+  laneMoveTo(laneDrag.v0 - dx / lanePXE());
+});
+const laneUp = e => {
+  if (!laneDrag) return;
+  const d = laneDrag; laneDrag = null; lane.classList.remove("dragging");
+  if (!d.moved && e && e.type === "pointerup") {   // Tippen: zum angetippten Zeitpunkt springen
+    const r = lane.getBoundingClientRect();
+    laneView = clamp(d.v0 + (e.clientX - r.left - laneHitX()) / lanePXE(), 0, seqTotal - 0.01);
+  }
+  laneSettle(d.was);
+};
+lane.addEventListener("pointerup", laneUp);
+lane.addEventListener("pointercancel", () => { if (laneDrag) { laneDrag = null; lane.classList.remove("dragging"); laneSettle(false); } });
+lane.addEventListener("wheel", e => {
+  const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : (e.shiftKey ? e.deltaY : 0);
+  if (!d) return;   // senkrechtes Scrollen bleibt für die Seite
+  e.preventDefault();
+  if (playing) { wheelWas = true; stop(true); }
+  laneMoveTo(curX() + d / lanePXE());
+  clearTimeout(wheelTimer);
+  wheelTimer = setTimeout(() => { const w = wheelWas; wheelWas = false; laneSettle(w); }, 260);
+}, { passive: false });
+
+/* ---------- Mithören: Mikrofon, Tonerkennung (YIN), warten bis richtig gespielt ---------- */
+const listen = { on: false, stream: null, src: null, an: null, buf: null, raf: 0, floor: 0.003, trough: 1, lastOnset: 0, onsetT: -1e9, hits: 0, stepT: 0, streak: 0, cmnd: null };
+const lBar = $id("listenBar"), lMsg = $id("lMsg"), tListen = $id("tListen"), lSens = $id("lSens");
+const freqToMidi = f => 69 + 12 * Math.log2(f / 440);
+function lMessage(t) { lMsg.textContent = t || ""; lMsg.hidden = !t; }
+
+async function startListening() {
+  lMessage("");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { lBar.hidden = false; lMessage("Dieser Browser erlaubt hier keinen Mikrofonzugriff. Öffne die Seite über https in Chrome, Safari oder Firefox."); return false; }
+  if (playing) stop(true);
+  ensureAudio();
+  try {
+    listen.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) {
+    lBar.hidden = false; lMessage("Kein Zugriff aufs Mikrofon. Erlaube den Zugriff im Browser (Schloss-Symbol neben der Adresse) und schalte Mithören erneut ein.");
+    return false;
+  }
+  listen.src = ctx.createMediaStreamSource(listen.stream);
+  listen.an = ctx.createAnalyser(); listen.an.fftSize = 2048;
+  listen.src.connect(listen.an);
+  listen.buf = new Float32Array(listen.an.fftSize);
+  listen.cmnd = new Float32Array(listen.an.fftSize);
+  listen.on = true; listen.streak = 0;
+  lBar.hidden = false; lBar.classList.add("live");
+  $id("lStatus").textContent = "Hört zu. Spiel den angezeigten Ton.";
+  listenTarget();
+  listen.raf = requestAnimationFrame(listenLoop);
+  return true;
+}
+function stopListening() {
+  listen.on = false; cancelAnimationFrame(listen.raf);
+  if (listen.stream) listen.stream.getTracks().forEach(t => t.stop());
+  try { listen.src && listen.src.disconnect(); } catch (e) {}
+  listen.stream = listen.src = listen.an = null;
+  tListen.checked = false;
+  lBar.hidden = true; lBar.classList.remove("live", "hit", "miss");
+}
+tListen.addEventListener("change", async () => {
+  if (tListen.checked) { const ok = await startListening(); if (!ok) tListen.checked = false; }
+  else { stopListening(); lMessage(""); }
+});
+$id("lSkip").addEventListener("click", () => listenAdvance(false));
+
+// Zielton(e) des aktuellen Schritts anzeigen
+function listenTarget() {
+  const ev = evOf(seq[state.pos]);
+  const main = ev.notes.find(n => n.role === "melody") || ev.notes[0];
+  $id("lTarget").textContent = ev.notes.map(n => nameOf(n.midi)).join(" · ");
+  $id("lTargetSub").textContent = ev.notes.length > 1
+    ? `Einer davon reicht · z. B. Saite ${main.s}, Bund ${main.f}`
+    : `Saite ${main.s} · Bund ${main.f}`;
+  $id("lStreak").textContent = listen.streak ? `${listen.streak} richtig in Folge` : "";
+  // kurze Sperrzeit: der gerade gespielte Ton soll nicht schon für den nächsten Schritt zählen
+  listen.stepT = performance.now() + 250; listen.hits = 0; listen.onsetT = -1e9;
+  if (lBar.classList.contains("miss")) { lBar.classList.remove("miss"); $id("lStatus").textContent = "Hört zu. Spiel den angezeigten Ton."; }
+}
+function listenAdvance(correct) {
+  if (correct) listen.streak++; else listen.streak = 0;
+  lBar.classList.remove("miss"); lBar.classList.toggle("hit", correct);
+  setTimeout(() => lBar.classList.remove("hit"), 280);
+  if (state.pos >= seq.length - 1 && !isLoop()) {
+    $id("lStatus").textContent = "Geschafft! Du hast das Stück bis zum Ende gespielt.";
+    listen.stepT = Infinity; return;
+  }
+  state.pos = (state.pos + 1) % seq.length;
+  render();
+}
+
+// Grundfrequenz nach YIN (de Cheveigné & Kawahara)
+function detectPitch(x, sr, cmnd) {
+  const N = x.length, tMin = Math.floor(sr / 1400), tMax = Math.min(Math.floor(sr / 72), N >> 1), W = N - tMax;
+  let sum = 0; cmnd[0] = 1;
+  for (let t = 1; t <= tMax; t++) {
+    let d = 0;
+    for (let i = 0; i < W; i++) { const v = x[i] - x[i + t]; d += v * v; }
+    sum += d; cmnd[t] = sum ? d * t / sum : 1;
+  }
+  let t = -1;
+  for (let k = tMin; k < tMax; k++) {
+    if (cmnd[k] < 0.15) { while (k + 1 < tMax && cmnd[k + 1] < cmnd[k]) k++; t = k; break; }
+  }
+  if (t < 0) { let best = 1; for (let k = tMin; k < tMax; k++) if (cmnd[k] < best) { best = cmnd[k]; t = k; } if (best > 0.3) return null; }
+  const a = cmnd[t - 1] ?? cmnd[t], b = cmnd[t], c = cmnd[t + 1] ?? cmnd[t];
+  const den = a - 2 * b + c, shift = den ? 0.5 * (a - c) / den : 0;
+  return { f: sr / (t + clamp(shift, -1, 1)), conf: 1 - b };
+}
+// passt der gehörte Ton zu einem Ton des Schritts? (eine Oktave Abweichung wird toleriert)
+function matchTarget(m, ev) {
+  for (const n of ev.notes) {
+    const diff = m - n.midi;
+    if (Math.abs(diff) > 12.5) continue;
+    const pc = ((diff % 12) + 12) % 12, d = Math.min(pc, 12 - pc);
+    if (d < 0.45) return n;
+  }
+  return null;
+}
+function listenLoop() {
+  if (!listen.on || !listen.an) return;
+  const x = listen.buf; listen.an.getFloatTimeDomainData(x);
+  let sq = 0; for (let i = 0; i < x.length; i++) sq += x[i] * x[i];
+  const rms = Math.sqrt(sq / x.length), now = performance.now();
+  // Grundrauschen langsam mitführen, Schwelle aus Empfindlichkeit
+  listen.floor = rms < listen.floor ? listen.floor * 0.9 + rms * 0.1 : listen.floor * 0.9995 + rms * 0.0005;
+  const sens = +lSens.value, thr = Math.max(listen.floor * (1.6 + (10 - sens) * 0.45), 0.0025 + (10 - sens) * 0.0022);
+  // Anschlag erkennen: deutlicher Anstieg gegenüber dem Tiefpunkt seit dem letzten Anschlag
+  listen.trough = Math.min(listen.trough, rms);
+  const ownSound = now < lastOwnSound + 700;
+  if (!ownSound && rms > thr && rms > listen.trough * 1.8 && now - listen.lastOnset > 110) {
+    listen.lastOnset = now; listen.trough = rms;
+    if (now >= listen.stepT) { listen.onsetT = now; listen.hits = 0; }
+  }
+  // Pegelanzeige
+  $id("lLevel").style.width = clamp(Math.sqrt(rms / 0.25), 0, 1) * 100 + "%";
+  $id("lThr").style.left = clamp(Math.sqrt(thr / 0.25), 0, 1) * 100 + "%";
+  // Tonhöhe
+  if (rms > thr * 0.7) {
+    const p = detectPitch(x, ctx.sampleRate, listen.cmnd);
+    if (p && p.conf > 0.75) {
+      const m = freqToMidi(p.f), r = Math.round(m), cents = Math.round((m - r) * 100);
+      $id("lHeard").textContent = nameOf(r);
+      $id("lCents").textContent = (cents === 0 ? "genau" : (cents > 0 ? "+" : "") + cents + " Cent") + " · " + p.f.toFixed(1) + " Hz";
+      const ev = evOf(seq[state.pos]);
+      if (now - listen.onsetT < 450 && !ownSound) {
+        if (matchTarget(m, ev)) { if (++listen.hits >= 3) { listen.onsetT = -1e9; listenAdvance(true); } }
+        else if (now - listen.onsetT > 250 && listen.hits === 0) {
+          lBar.classList.add("miss"); $id("lStatus").textContent = `Gehört ${nameOf(r)}, gesucht ${ev.notes.map(n => nameOf(n.midi)).join(" oder ")}`;
+          listen.onsetT = -1e9; listen.streak = 0; $id("lStreak").textContent = "";
+        }
+      }
+    }
+  } else if (now - listen.lastOnset > 1500) {
+    $id("lHeard").textContent = "–"; $id("lCents").textContent = "";
+    if (lBar.classList.contains("miss")) { lBar.classList.remove("miss"); $id("lStatus").textContent = "Hört zu. Spiel den angezeigten Ton."; }
+  }
+  listen.raf = requestAnimationFrame(listenLoop);
+}
 formChips.addEventListener("click", e => {
   const b = e.target.closest(".fchip"); if (!b) return;
   const bi = +b.dataset.b;
@@ -691,8 +913,11 @@ function loadSong(s) {
   if (!saved.bpm) state.bpm = s.defaultBpm;
   setBpm(state.bpm);
   modeSel.value = state.mode;
-  if (state.mode === "measure") measureLock = 0;
-  state.pos = 0; seq = buildSeq();
+  if (state.mode === "measure") {
+    measureLock = 0;
+    try { const p = JSON.parse(localStorage.getItem("gtt-pos-" + s.id) || "null"); if (p && p.mode === "measure") measureLock = p.m; } catch (e) {}
+  }
+  state.pos = 0; seq = buildSeq(); restorePos();
   laneWrap.hidden = !state.showLane;
   buildBoard(); buildTab(); sizeLane(); render();
 }
