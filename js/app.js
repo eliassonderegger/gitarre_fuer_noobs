@@ -631,8 +631,8 @@ seek.addEventListener("pointerdown", e => {
   const { i } = idxAtClient(e.clientX); state.pos = i; render(); showBubble(e.clientX);
 });
 seek.addEventListener("pointermove", e => {
+  if (!seekDrag) return;   // nur beim Ziehen folgen, nicht beim blossen Darüberfahren
   showBubble(e.clientX);
-  if (!seekDrag) return;
   const { i } = idxAtClient(e.clientX);
   if (i !== state.pos) { state.pos = i; render(); }
 });
@@ -641,7 +641,7 @@ const endDrag = () => {
   const was = seekDrag.was; seekDrag = null;
   if (was) play(false); else previewCurrent();
 };
-seek.addEventListener("pointerup", e => { endDrag(); if (e.pointerType !== "mouse") seekBubble.hidden = true; });
+seek.addEventListener("pointerup", () => { endDrag(); seekBubble.hidden = true; });
 seek.addEventListener("pointercancel", () => { seekDrag = null; seekBubble.hidden = true; });
 seek.addEventListener("pointerleave", () => { if (!seekDrag) seekBubble.hidden = true; });
 function jumpBar(d) {
@@ -709,9 +709,11 @@ lane.addEventListener("wheel", e => {
 }, { passive: false });
 
 /* ---------- Mithören: Mikrofon, Tonerkennung (YIN), warten bis richtig gespielt ---------- */
-const listen = { on: false, stream: null, src: null, an: null, buf: null, raf: 0, floor: 0.003, trough: 1, lastOnset: 0, onsetT: -1e9, hits: 0, stepT: 0, streak: 0, cmnd: null };
+const listen = { on: false, stream: null, src: null, an: null, anF: null, buf: null, raf: 0, floor: 0.003, trough: 1, lastOnset: 0, onsetT: -1e9, hits: 0, specHits: 0, stepT: 0, streak: 0, cmnd: null,
+  fluxBins: null, fluxPrev: null, fluxHist: [], specRing: [], ringIdx: 0, base: null, prevMidis: [] };
 const lBar = $id("listenBar"), lMsg = $id("lMsg"), tListen = $id("tListen"), lSens = $id("lSens");
 const freqToMidi = f => 69 + 12 * Math.log2(f / 440);
+if (/[?&]debug/.test(location.search)) window.__listen = listen;
 function lMessage(t) { lMsg.textContent = t || ""; lMsg.hidden = !t; }
 
 async function startListening() {
@@ -728,8 +730,15 @@ async function startListening() {
   listen.src = ctx.createMediaStreamSource(listen.stream);
   listen.an = ctx.createAnalyser(); listen.an.fftSize = 2048;
   listen.src.connect(listen.an);
+  listen.an.smoothingTimeConstant = 0;
+  // zweiter Analysator mit feiner Frequenzauflösung (≈ 6 Hz) für die Obertöne der Zieltöne
+  listen.anF = ctx.createAnalyser(); listen.anF.fftSize = 8192; listen.anF.smoothingTimeConstant = 0;
+  listen.src.connect(listen.anF);
   listen.buf = new Float32Array(listen.an.fftSize);
   listen.cmnd = new Float32Array(listen.an.fftSize);
+  listen.fluxBins = new Float32Array(listen.an.frequencyBinCount); listen.fluxPrev = new Float32Array(listen.an.frequencyBinCount);
+  listen.specRing = Array.from({ length: 10 }, () => new Float32Array(listen.anF.frequencyBinCount)); listen.ringIdx = 0;
+  listen.fluxHist = []; listen.base = null;
   listen.on = true; listen.streak = 0;
   lBar.hidden = false; lBar.classList.add("live");
   $id("lStatus").textContent = "Hört zu. Spiel den angezeigten Ton.";
@@ -741,7 +750,7 @@ function stopListening() {
   listen.on = false; cancelAnimationFrame(listen.raf);
   if (listen.stream) listen.stream.getTracks().forEach(t => t.stop());
   try { listen.src && listen.src.disconnect(); } catch (e) {}
-  listen.stream = listen.src = listen.an = null;
+  listen.stream = listen.src = listen.an = listen.anF = null;
   tListen.checked = false;
   lBar.hidden = true; lBar.classList.remove("live", "hit", "miss");
 }
@@ -761,7 +770,10 @@ function listenTarget() {
     : `Saite ${main.s} · Bund ${main.f}`;
   $id("lStreak").textContent = listen.streak ? `${listen.streak} richtig in Folge` : "";
   // kurze Sperrzeit: der gerade gespielte Ton soll nicht schon für den nächsten Schritt zählen
-  listen.stepT = performance.now() + 250; listen.hits = 0; listen.onsetT = -1e9;
+  listen.stepT = performance.now() + 150; listen.hits = 0; listen.specHits = 0; listen.onsetT = -1e9;
+  // Töne des vorherigen Schritts: klingen evtl. noch nach und sind dann kein „falscher Ton“
+  const prev = seq[(state.pos - 1 + seq.length) % seq.length];
+  listen.prevMidis = prev ? evOf(prev).notes.map(n => n.midi) : [];
   if (lBar.classList.contains("miss")) { lBar.classList.remove("miss"); $id("lStatus").textContent = "Hört zu. Spiel den angezeigten Ton."; }
 }
 function listenAdvance(correct) {
@@ -804,37 +816,111 @@ function matchTarget(m, ev) {
   }
   return null;
 }
+// Stärke eines Tons im Spektrum: Spitzen der ersten vier Obertöne (Fenster ±2.5 %),
+// dazu wie deutlich die Spitze aus ihrer Umgebung herausragt (Verhältnis zum Mittel der Nachbarbereiche ±4–9 %)
+function harmonicLevels(spec, midi, binHz) {
+  const f0 = 440 * Math.pow(2, (midi - 69) / 12), out = [];
+  for (let h = 1; h <= 4; h++) {
+    const f = f0 * h, lo = Math.max(1, Math.floor(f * 0.975 / binHz)), hi = Math.min(spec.length - 1, Math.ceil(f * 1.025 / binHz));
+    let m = 0; for (let k = lo; k <= hi; k++) if (spec[k] > m) m = spec[k];
+    let side = 0, cnt = 0;
+    const a0 = Math.floor(f * 0.91 / binHz), a1 = Math.floor(f * 0.96 / binHz), b0 = Math.ceil(f * 1.04 / binHz), b1 = Math.ceil(f * 1.09 / binHz);
+    for (let k = Math.max(1, a0); k <= a1; k++) { side += spec[k]; cnt++; }
+    for (let k = b0; k <= Math.min(spec.length - 1, b1); k++) { side += spec[k]; cnt++; }
+    out.push({ m, prom: m / ((side / Math.max(1, cnt)) + 1e-9) });
+  }
+  return out;
+}
+// Neu angeschlagener Zielton? Vergleicht das Spektrum jetzt mit dem kurz vor dem Anschlag.
+// Ein nachklingender alter Ton wird leiser, ein frisch gezupfter Ton wird an seinen Obertönen deutlich lauter
+// und bildet dort eigene Spitzen.
+function spectralMatch(spec, base, ev, binHz, peak) {
+  let best = null;
+  for (const n of ev.notes) {
+    const now = harmonicLevels(spec, n.midi, binHz), before = harmonicLevels(base, n.midi, binHz);
+    let rises = 0, low = false;
+    for (let h = 0; h < 4; h++) {
+      const up = now[h].m > before[h].m * 1.8 && now[h].prom > 4 && now[h].m > peak * 0.02;
+      if (up) { rises++; if (h < 2) low = true; }
+    }
+    if (rises >= 2 && low) { best = n; break; }
+  }
+  return best;
+}
 function listenLoop() {
   if (!listen.on || !listen.an) return;
   const x = listen.buf; listen.an.getFloatTimeDomainData(x);
   let sq = 0; for (let i = 0; i < x.length; i++) sq += x[i] * x[i];
-  const rms = Math.sqrt(sq / x.length), now = performance.now();
+  const rms = Math.sqrt(sq / x.length), now = performance.now(), sr = ctx.sampleRate;
   // Grundrauschen langsam mitführen, Schwelle aus Empfindlichkeit
   listen.floor = rms < listen.floor ? listen.floor * 0.9 + rms * 0.1 : listen.floor * 0.9995 + rms * 0.0005;
   const sens = +lSens.value, thr = Math.max(listen.floor * (1.6 + (10 - sens) * 0.45), 0.0025 + (10 - sens) * 0.0022);
-  // Anschlag erkennen: deutlicher Anstieg gegenüber dem Tiefpunkt seit dem letzten Anschlag
+
+  // Spektren holen (linear), fein aufgelöstes Spektrum im Ringpuffer ablegen
+  const fb = listen.fluxBins; listen.an.getFloatFrequencyData(fb);
+  const ring = listen.specRing, cur = ring[listen.ringIdx];
+  listen.anF.getFloatFrequencyData(cur);
+  for (let k = 0; k < cur.length; k++) cur[k] = Math.pow(10, cur[k] / 20);
+  const binF = sr / listen.anF.fftSize, binT = sr / listen.an.fftSize;
+  // Anschlag erkennen über spektralen Fluss: wie viel NEUE Energie kommt dazu (unabhängig vom nachklingenden Ton)
+  let flux = 0;
+  const k0 = Math.floor(70 / binT), k1 = Math.min(fb.length - 1, Math.ceil(2500 / binT));
+  for (let k = k0; k <= k1; k++) {
+    const v = Math.log1p(1000 * Math.pow(10, fb[k] / 20));
+    const d = v - listen.fluxPrev[k]; if (d > 0) flux += d;
+    listen.fluxPrev[k] = v;
+  }
+  const hist = listen.fluxHist; hist.push(flux); if (hist.length > 40) hist.shift();
+  const med = hist.slice().sort((a, b) => a - b)[hist.length >> 1] || 0;
+  const fluxThr = med * (1.8 + (10 - sens) * 0.25) + 2 + (10 - sens) * 0.6;
   listen.trough = Math.min(listen.trough, rms);
   const ownSound = now < lastOwnSound + 700;
-  if (!ownSound && rms > thr && rms > listen.trough * 1.8 && now - listen.lastOnset > 110) {
+  const fluxOnset = flux > fluxThr && rms > thr * 0.5;
+  const rmsOnset = rms > thr && rms > listen.trough * 1.8;
+  if (!ownSound && (fluxOnset || rmsOnset) && now - listen.lastOnset > 90) {
     listen.lastOnset = now; listen.trough = rms;
-    if (now >= listen.stepT) { listen.onsetT = now; listen.hits = 0; }
+    if (now >= listen.stepT) {
+      listen.onsetT = now; listen.hits = 0;
+    }
   }
   // Pegelanzeige
   $id("lLevel").style.width = clamp(Math.sqrt(rms / 0.25), 0, 1) * 100 + "%";
   $id("lThr").style.left = clamp(Math.sqrt(thr / 0.25), 0, 1) * 100 + "%";
-  // Tonhöhe
+
+  const ev = evOf(seq[state.pos]);
+  const inWindow = now - listen.onsetT < 500 && !ownSound;
+  // 1) Obertöne des Zieltons sind gegenüber vor ~100–170 ms deutlich lauter geworden (läuft laufend,
+  //    unabhängig von der Anschlagserkennung). Vergleichsbasis = Minimum dieser älteren Spektren.
+  if (!ownSound && now >= listen.stepT + 100) {
+    const base = listen.base || (listen.base = new Float32Array(cur.length));
+    const R = ring.length, ri = listen.ringIdx;
+    for (let k = 0; k < 1400; k++) {
+      let mn = Infinity;
+      for (let j = 6; j <= 10; j++) { const v = ring[(ri - j + R * 2) % R][k]; if (v < mn) mn = v; }
+      base[k] = mn;
+    }
+    let peak = 0; for (let k = 8; k < 900; k++) if (cur[k] > peak) peak = cur[k];
+    if (spectralMatch(cur, base, ev, binF, peak)) {
+      if (++listen.specHits >= 2) { listen.onsetT = -1e9; listen.ringIdx = (listen.ringIdx + 1) % ring.length; listenAdvance(true); listen.raf = requestAnimationFrame(listenLoop); return; }
+    } else listen.specHits = 0;
+  }
+  // 2) Tonhöhe (YIN): für die Anzeige und als zweiter Weg zum Treffer
   if (rms > thr * 0.7) {
-    const p = detectPitch(x, ctx.sampleRate, listen.cmnd);
+    const p = detectPitch(x, sr, listen.cmnd);
     if (p && p.conf > 0.75) {
       const m = freqToMidi(p.f), r = Math.round(m), cents = Math.round((m - r) * 100);
       $id("lHeard").textContent = nameOf(r);
       $id("lCents").textContent = (cents === 0 ? "genau" : (cents > 0 ? "+" : "") + cents + " Cent") + " · " + p.f.toFixed(1) + " Hz";
-      const ev = evOf(seq[state.pos]);
-      if (now - listen.onsetT < 450 && !ownSound) {
+      if (inWindow) {
         if (matchTarget(m, ev)) { if (++listen.hits >= 3) { listen.onsetT = -1e9; listenAdvance(true); } }
-        else if (now - listen.onsetT > 250 && listen.hits === 0) {
-          lBar.classList.add("miss"); $id("lStatus").textContent = `Gehört ${nameOf(r)}, gesucht ${ev.notes.map(n => nameOf(n.midi)).join(" oder ")}`;
-          listen.onsetT = -1e9; listen.streak = 0; $id("lStreak").textContent = "";
+        else if (now - listen.onsetT > 380 && listen.hits === 0 && listen.specHits === 0) {
+          // nur als Fehler werten, wenn es nicht bloss der nachklingende Ton von vorher ist
+          const ringing = listen.prevMidis.some(pm => Math.abs(m - pm) < 0.5 || Math.abs(m - pm - 12) < 0.5 || Math.abs(m - pm + 12) < 0.5);
+          if (!ringing) {
+            lBar.classList.add("miss"); $id("lStatus").textContent = `Gehört ${nameOf(r)}, gesucht ${ev.notes.map(n => nameOf(n.midi)).join(" oder ")}`;
+            listen.streak = 0; $id("lStreak").textContent = "";
+          }
+          listen.onsetT = -1e9;
         }
       }
     }
@@ -842,6 +928,7 @@ function listenLoop() {
     $id("lHeard").textContent = "–"; $id("lCents").textContent = "";
     if (lBar.classList.contains("miss")) { lBar.classList.remove("miss"); $id("lStatus").textContent = "Hört zu. Spiel den angezeigten Ton."; }
   }
+  listen.ringIdx = (listen.ringIdx + 1) % ring.length;
   listen.raf = requestAnimationFrame(listenLoop);
 }
 formChips.addEventListener("click", e => {
