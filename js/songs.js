@@ -17,7 +17,7 @@ function M(raw) {
       return { s, f, midi: TUNING[s - 1] + f, role: ROLE[t[3]], tech: t[4] || null };
     }).sort((a, b) => a.s - b.s);
     const ev = { dur, pos, notes };
-    pos += dur;
+    pos = Math.round((pos + dur) * 1e6) / 1e6;   // Triolen (2/3) ohne Rundungsfehler
     return ev;
   });
 }
@@ -50,6 +50,52 @@ window.SONGS = (window.SONGS || []).concat([{
   form: ["A","A","B","B","A"],
   formShort: ["A","B","A"],
   measures: [A1,A2,A1,A2,A5,A6,A7,A8,B1,B2,B3,B4,B5,B6,B7,B8].map(M)
+}]);
+
+/* ---------- Romanza (Spanische Romanze, anonym, 19. Jh.) – Teil 1 in e-Moll ----------
+   Durchgehende Achteltriolen: Melodie auf der hohen E-Saite, dann leere B- und G-Saite. */
+const T = 2 / 3;
+// ein Takt aus drei Triolen: Melodiebünde, Saite-2/3-Griff, Bass auf Schlag 1
+function R(mel, b2, g3, bass) {
+  const out = [];
+  mel.forEach((f, i) => {
+    out.push([T, `1:${f}m` + (i === 0 && bass ? ` ${bass}b` : "")]);
+    out.push([T, `2:${b2}h`]);
+    out.push([T, `3:${g3}h`]);
+  });
+  return out;
+}
+const RZ = [
+  R([7, 7, 7],   0, 0, "6:0"),   // H H H
+  R([7, 5, 3],   0, 0, "6:0"),   // H A G
+  R([3, 2, 0],   0, 0, "6:0"),   // G Fis E
+  R([0, 3, 7],   0, 0, "6:0"),   // E G H
+  R([12, 12, 12],0, 0, "6:0"),   // E E E (hoch)
+  R([12, 10, 8], 0, 0, "6:0"),   // E D C
+  R([8, 7, 5],   5, 5, "5:0"),   // C H A   (a-Moll, Mini-Barré im 5. Bund)
+  R([5, 7, 8],   5, 5, "5:0"),   // A H C
+  R([7, 8, 7],   7, 8, "6:7"),   // H C H   (H7, 7. Lage)
+  R([11, 8, 7],  7, 8, "6:7"),   // Dis C H
+  R([7, 5, 3],   0, 0, "6:0"),   // H A G
+  R([3, 2, 0],   0, 0, "6:0"),   // G Fis E
+  R([2, 2, 2],   0, 2, "5:2"),   // Fis Fis Fis (H7)
+  R([2, 3, 2],   0, 2, "5:2"),   // Fis G Fis
+  R([0, 0, 0],   0, 0, "6:0"),   // E E E
+  [[6, "1:0m 2:0h 3:0h 6:0b"]]   // Schlussakkord e-Moll
+];
+
+window.SONGS = window.SONGS.concat([{
+  id: "romanza",
+  title: "Romanza",
+  meta: "Spanische Romanze, anonym, 19. Jh. · 3/4-Takt in Achteltriolen · Teil 1 in e-Moll · gut für Anfänger: Melodie auf der hohen E-Saite, dazu leere Saiten",
+  beats: 3, eighths: 6, refBpm: 76, defaultBpm: 50,
+  sections: {
+    A: { key: "e-Moll", measures: [0,1,2,3,4,5,6,7] },
+    B: { key: "e-Moll", measures: [8,9,10,11,12,13,14,15] }
+  },
+  form: ["A","B"],
+  formShort: ["A","B"],
+  measures: RZ.map(M)
 }]);
 
 })();

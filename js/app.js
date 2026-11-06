@@ -11,7 +11,7 @@ const TECH_DE = { s: "Slide", h: "Hammer-on", p: "Pull-off" };
 const ROLE_GAIN = { melody: 1.0, harmony: 0.55, bass: 0.85 };
 
 /* ---------- Zustand ---------- */
-const DEFAULTS = { bpm: 56, mode: "all", repeats: true, metro: false, countIn: true, showNext: true, showRing: true, showLane: false, names: true, muted: { melody:false, harmony:false, bass:false } };
+const DEFAULTS = { bpm: 56, mode: "all", repeats: true, metro: false, countIn: true, showNext: true, showRing: true, showLane: false, stepSound: false, names: true, muted: { melody:false, harmony:false, bass:false } };
 let saved = {};
 try { saved = JSON.parse(localStorage.getItem("gtt-settings") || "{}") || {}; } catch (e) { saved = {}; }
 if (saved.v !== 2) delete saved.showLane;   // Mitspiel-Leiste ist neu standardmässig aus
@@ -22,8 +22,8 @@ let seq = [], blocks = [], measureLock = 0;
 let seqStart = [], seqBar = [], seqTotal = 0, seqBars = 0, seqDirty = true;
 function persist() {
   try {
-    const { bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted } = state;
-    localStorage.setItem("gtt-settings", JSON.stringify({ v: 2, bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, names, muted }));
+    const { bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, stepSound, names, muted, songId } = state;
+    localStorage.setItem("gtt-settings", JSON.stringify({ v: 2, bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, stepSound, names, muted, songId }));
   } catch (e) {}
 }
 
@@ -189,7 +189,7 @@ function stop(kill = true) {
 }
 function toggle() { playing ? stop(true) : play(); }
 function restartIfPlaying(fn) { const was = playing; if (was) stop(true); fn(); render(); if (was) play(false); }
-function previewCurrent() { if (listen.on) return; ensureAudio(); playEvent(evOf(seq[state.pos]), ctx.currentTime + 0.01); }
+function previewCurrent() { if (listen.on || !state.stepSound) return; ensureAudio(); playEvent(evOf(seq[state.pos]), ctx.currentTime + 0.01); }
 function step(d) {
   if (playing) stop(true);
   state.pos = (state.pos + d + seq.length) % seq.length;
@@ -218,7 +218,7 @@ const BX0 = 124, FL = 1790, SY0 = 58, SDY = 40, FRETS = 15;
 const fx = n => BX0 + FL * (1 - Math.pow(2, -n / 12));
 const noteX = f => f === 0 ? BX0 - 26 : (fx(f - 1) + fx(f)) / 2;
 const sy = s => SY0 + (s - 1) * SDY;
-const BOARD_ROLE = { melody: "#c65a32", harmony: "#2f8578", bass: "#a8843c" };
+const BOARD_ROLE = { melody: "#b5402b", harmony: "#3d7a58", bass: "#c99a2e" };
 const board = document.getElementById("board");
 
 function buildBoard() {
@@ -228,7 +228,7 @@ function buildBoard() {
     <linearGradient id="frame" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a1d15"/><stop offset="1" stop-color="#1b120d"/></linearGradient>
     <radialGradient id="glow"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
   </defs>
-  <rect x="0" y="0" width="1200" height="322" rx="20" fill="url(#frame)"/>
+  <rect x="0" y="0" width="1200" height="322" fill="url(#frame)"/>
   <rect x="${BX0}" y="34" width="${end - BX0}" height="248" fill="url(#wood)"/>`;
   // Holzmaserung
   let seed = 7; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
@@ -246,7 +246,7 @@ function buildBoard() {
     h += `<line x1="${x}" x2="${x}" y1="36" y2="280" stroke="#a89a88" stroke-width="3.2"/><line x1="${x - 0.8}" x2="${x - 0.8}" y1="36" y2="280" stroke="#e6dccd" stroke-width="1" stroke-opacity=".7"/>`;
   }
   // Sattel
-  h += `<rect x="${BX0 - 7}" y="32" width="9" height="252" rx="2" fill="#efe6d6"/>`;
+  h += `<rect x="${BX0 - 7}" y="32" width="9" height="252" fill="#efe6d6"/>`;
   // Saiten
   const widths = [1.3, 1.6, 2.0, 2.4, 2.9, 3.4];
   const colors = ["#ece4d8", "#e4dacb", "#dbd0bf", "#c9a35d", "#c39a52", "#b98f47"];
@@ -301,7 +301,7 @@ function probe(s, f) {
   playNote(s, n.midi, ctx.currentTime + 0.01, 0.9, false);
   const layer = document.getElementById("probeLayer");
   const g = document.createElementNS(svgNS, "g");
-  g.innerHTML = `<g transform="translate(${noteX(f)},${sy(s)})"><circle r="16" fill="#f6ede1" stroke="#c65a32" stroke-width="2.5"/><text text-anchor="middle" dy="5" font-size="14" font-weight="700" fill="#2a1d16">${f}</text><text x="19" y="-15" font-size="12.5" font-weight="700" fill="#f6ede1" stroke="#1d140e" stroke-width="3.5" paint-order="stroke">${nameOf(n.midi)}</text></g>`;
+  g.innerHTML = `<g transform="translate(${noteX(f)},${sy(s)})"><circle r="16" fill="#f6ede1" stroke="#b5402b" stroke-width="2.5"/><text text-anchor="middle" dy="5" font-size="14" font-weight="700" fill="#2a1d16">${f}</text><text x="19" y="-15" font-size="12.5" font-weight="700" fill="#f6ede1" stroke="#1d140e" stroke-width="3.5" paint-order="stroke">${nameOf(n.midi)}</text></g>`;
   layer.appendChild(g);
   setTimeout(() => g.remove(), 900);
 }
@@ -334,12 +334,13 @@ function buildTab() {
     const W = PL + song.eighths * PX + PR;
     const sec = sectionOf(mi), ms = song.sections[sec].measures;
     const isStart = ms[0] === mi, isEnd = ms[ms.length - 1] === mi;
+    const rep = state.repeats && song.form.some((b, i) => b === sec && song.form[i + 1] === sec);   // nur echte Wiederholungen
     const xEnd = W - PR + 6, yA = TOP, yB = TOP + 5 * SP;
     let s = `<svg class="meas" data-m="${mi}" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="group" aria-label="Takt ${mi + 1}">`;
-    s += `<rect class="mframe" x="1" y="1" width="${W - 2}" height="${H - 2}" rx="8"/>`;
+    s += `<rect class="mframe" x="1" y="1" width="${W - 2}" height="${H - 2}"/>`;
     meas.forEach((ev, ei) => {
       const w = PX * Math.min(ev.dur, 1); ev._x = PL + ev.pos * PX + w / 2;
-      s += `<rect class="col" data-e="${ei}" x="${ev._x - w / 2}" y="${TOP - 13}" width="${w}" height="${5 * SP + 26}" rx="4"/>`;
+      s += `<rect class="col" data-e="${ei}" x="${ev._x - w / 2}" y="${TOP - 13}" width="${w}" height="${5 * SP + 26}"/>`;
     });
     for (let i = 0; i < 6; i++) {
       const y = TOP + i * SP;
@@ -347,10 +348,10 @@ function buildTab() {
     }
     s += `<line class="bar" x1="${PL - 8}" x2="${PL - 8}" y1="${yA}" y2="${yB}"/>`;
     s += `<line class="bar" x1="${xEnd}" x2="${xEnd}" y1="${yA}" y2="${yB}"/>`;
-    if (state.repeats && isStart) {
+    if (rep && isStart) {
       s += `<line class="rep" x1="${PL - 8}" x2="${PL - 8}" y1="${yA}" y2="${yB}"/><circle class="dot" cx="${PL - 1}" cy="${TOP + 2 * SP - 6.5 + 6.5}" r="2"/><circle class="dot" cx="${PL - 1}" cy="${TOP + 3 * SP}" r="2"/>`;
     }
-    if (state.repeats && isEnd) {
+    if (rep && isEnd) {
       s += `<line class="rep" x1="${xEnd}" x2="${xEnd}" y1="${yA}" y2="${yB}"/><circle class="dot" cx="${xEnd - 7}" cy="${TOP + 2 * SP}" r="2"/><circle class="dot" cx="${xEnd - 7}" cy="${TOP + 3 * SP}" r="2"/>`;
     }
     meas.forEach((ev, ei) => ev.notes.forEach(n => {
@@ -398,7 +399,7 @@ function render() {
   drawMarkers(ref, ev);
   followBoard(ev);
   const beat = Math.floor(ev.pos / 2) + 1, off = ev.pos % 2;
-  const beatTxt = off === 0 ? `Schlag ${beat}` : (off === 1 ? `Schlag ${beat} und` : `Schlag ${beat} (Zwischenton)`);
+  const beatTxt = off === 0 ? `Schlag ${beat}` : (off === 1 ? `Schlag ${beat} und` : `Schlag ${beat}, ${Math.abs(off - 2 / 3) < 1e-3 ? "2. Triolenton" : Math.abs(off - 4 / 3) < 1e-3 ? "3. Triolenton" : "Zwischenton"}`);
   posLabel.innerHTML = `Teil ${sectionOf(ref.m)} · Takt ${ref.m + 1} · ${beatTxt}<small>Schritt ${ref.e + 1} von ${song.measures[ref.m].length}</small>`;
   nowNotes.innerHTML = ev.notes.map(n => `<span class="nchip ${n.role}"><b>${nameOf(n.midi)}</b> Saite ${n.s} · Bund ${n.f}${n.tech ? ` <em>${TECH_DE[n.tech]}</em>` : ""}</span>`).join("");
   formChips.innerHTML = blocks.map((b, i) => `<button class="fchip${i === ref.block ? " cur" : (i < ref.block ? " done" : "")}" data-b="${i}" aria-label="Zu ${b.label} springen"><b>${b.label}</b><span>${b.sub}</span></button>`).join("");
@@ -483,7 +484,7 @@ function drawLane(cx) {
   }
   // Saiten
   const sc = ["#ece4d8", "#e4dacb", "#dbd0bf", "#c9a35d", "#c39a52", "#b98f47"];
-  g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
+  g.font = "700 11px 'Jost', system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
   for (let s = 1; s <= 6; s++) {
     g.strokeStyle = sc[s - 1]; g.globalAlpha = .45; g.lineWidth = 0.8 + s * 0.25;
     g.beginPath(); g.moveTo(gutter, y(s)); g.lineTo(W, y(s)); g.stroke();
@@ -499,7 +500,7 @@ function drawLane(cx) {
   // Einzähl-Abdunkelung und Spiellinie liegen HINTER den Tönen, damit keine Zahl verdeckt wird
   if (counting) { g.fillStyle = "rgba(0,0,0,.5)"; g.fillRect(gutter, 0, hitX - gutter, H); }
   g.strokeStyle = "rgba(246,237,225,.85)"; g.lineWidth = 2 + flash * 2;
-  g.shadowColor = "#e27c52"; g.shadowBlur = 4 + flash * 16;
+  g.shadowColor = "#d9a441"; g.shadowBlur = 4 + flash * 16;
   g.beginPath(); g.moveTo(hitX, 4); g.lineTo(hitX, H - 4); g.stroke();
   g.shadowBlur = 0;
   // Töne (nicht über die Saitenbeschriftung zeichnen)
@@ -514,7 +515,7 @@ function drawLane(cx) {
   // 2) Köpfe von spät nach früh: der Ton, der als Nächstes dran ist, liegt immer oben
   const order = items.slice().reverse();
   order.sort((a, b) => (a.act === b.act ? 0 : a.act ? 1 : -1));
-  g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
+  g.font = "700 11px 'Jost', system-ui, sans-serif"; g.textBaseline = "middle"; g.textAlign = "center";
   order.forEach(it => it.ev.notes.forEach(n => {
     const yy = y(n.s), r = it.act ? rad + 1.5 : rad;
     g.globalAlpha = alphaOf(it, n);
@@ -522,18 +523,18 @@ function drawLane(cx) {
     g.fillStyle = BOARD_ROLE[n.role]; g.fill();
     g.lineWidth = it.act ? 2.2 : 1.5; g.strokeStyle = it.act ? "#fbf6ee" : "#241810"; g.stroke();
     g.fillStyle = "#fff"; g.fillText(String(n.f), it.x, yy + 0.5);
-    if (n.tech) { g.fillStyle = "#e9dfd1"; g.font = "italic 600 10px 'Instrument Sans', system-ui"; g.fillText(n.tech, it.x - r - 5, yy - r + 1); g.font = "700 11px 'Instrument Sans', system-ui, sans-serif"; }
+    if (n.tech) { g.fillStyle = "#e9dfd1"; g.font = "italic 600 10px 'Jost', system-ui"; g.fillText(n.tech, it.x - r - 5, yy - r + 1); g.font = "700 11px 'Jost', system-ui, sans-serif"; }
   }));
   g.globalAlpha = 1;
   g.restore();
   if (!playing && laneView === null) {
-    g.fillStyle = "rgba(233,223,209,.45)"; g.font = "600 11px 'Instrument Sans', system-ui, sans-serif"; g.textAlign = "right";
+    g.fillStyle = "rgba(233,223,209,.45)"; g.font = "600 11px 'Jost', system-ui, sans-serif"; g.textAlign = "right";
     g.fillText("← ziehen zum Spulen →", W - 10, 8); g.textAlign = "center";
   }
   // Einzähl-Zahl links neben der Spiellinie, ohne die Töne zu berühren
   if (counting) {
     const left = Math.ceil((seqStart[state.pos] - cx) / 2 - 1e-6);
-    g.fillStyle = "#f6ede1"; g.font = "600 34px 'Cormorant Garamond', Georgia, serif";
+    g.fillStyle = "#f6ede1"; g.font = "600 34px 'Jost', system-ui, sans-serif";
     g.fillText(String(left), (gutter + hitX - rad) / 2, H / 2);
   }
 }
@@ -886,6 +887,7 @@ bindToggle("tLane", "showLane", () => { laneWrap.hidden = !state.showLane; sizeL
 bindToggle("tNext", "showNext");
 bindToggle("tRing", "showRing");
 bindToggle("tNames", "names");
+bindToggle("tStepSound", "stepSound", () => {});
 document.querySelectorAll(".chip").forEach(ch => {
   const r = ch.dataset.role;
   ch.setAttribute("aria-pressed", String(!state.muted[r]));
@@ -906,11 +908,11 @@ document.addEventListener("keydown", e => {
 });
 
 /* ---------- Start ---------- */
-function loadSong(s) {
-  song = s;
+function loadSong(s, initial) {
+  song = s; state.songId = s.id;
   $("songTitle").textContent = s.title;
   $("songMeta").textContent = s.meta;
-  if (!saved.bpm) state.bpm = s.defaultBpm;
+  if (!initial || !saved.bpm) state.bpm = s.defaultBpm;
   setBpm(state.bpm);
   modeSel.value = state.mode;
   if (state.mode === "measure") {
@@ -923,8 +925,10 @@ function loadSong(s) {
 }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => drawFrame());
 const songSel = $("songSel");
-songSel.innerHTML = SONGS.map(s => `<option value="${s.id}">${s.title}</option>`).join("") + `<option disabled>Weitere Stücke folgen</option>`;
-songSel.addEventListener("change", () => { stop(true); loadSong(SONGS.find(s => s.id === songSel.value)); });
+songSel.innerHTML = SONGS.map(s => `<option value="${s.id}">${s.title}</option>`).join("");
+songSel.addEventListener("change", () => { stop(true); if (listen.on) stopListening(); loadSong(SONGS.find(s => s.id === songSel.value)); persist(); });
 updatePlayBtn();
-loadSong(SONGS[0]);
+const firstSong = SONGS.find(x => x.id === saved.songId) || SONGS[0];
+songSel.value = firstSong.id;
+loadSong(firstSong, true);
 })();

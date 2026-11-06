@@ -17,9 +17,15 @@ In `js/songs.js` ein Objekt an `window.SONGS` anhängen (siehe Lágrima als Vorl
 - Takte: `M([[Dauer in Achteln, "Saite:Bund+Stimme[~Technik] ..."], ...])`
   - Saite 1 = hohe E, 6 = tiefe E; Stimme `m` Melodie, `h` Harmonie, `b` Bass
   - Technik `~s` Slide, `~h` Hammer-on, `~p` Pull-off
-- Die Summe der Dauern pro Takt muss `eighths` ergeben.
+- Die Summe der Dauern pro Takt muss `eighths` ergeben. Triolen: Dauer `2/3` (siehe Romanza, Hilfsfunktion `R`).
 - Nur gemeinfreie Stücke (Komponist > 70 Jahre tot) oder eigene Arrangements einbauen.
 
 ## Arbeitsweise
 - Vor dem Push lokal mit Playwright laden und prüfen (keine Konsolenfehler, Takte zählen).
 - Jeder Push auf `main` löst ein Netlify-Deployment aus und verbraucht Kontingent: Änderungen bündeln.
+
+## Gestaltung
+- Mid-Century-Stil: keine runden Ecken (nur Notenpunkte sind Kreise), flache Farbflächen, Farbband unter dem Kopf.
+- Farben: Ochsenblut-Rot (Melodie), Tannengrün (Harmonie), Senfgelb (Bass) auf warmem Papierton; dunkles Holz-Griffbrett.
+- Schrift: Jost (geometrisch) für alles, DM Mono für Tab-Zahlen. Keine generischen „AI-Look“-Muster.
+- Beim Springen/Schritt kein Ton (Schalter „Ton beim Springen“, standardmässig aus).
