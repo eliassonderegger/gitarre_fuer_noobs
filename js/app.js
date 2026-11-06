@@ -20,6 +20,11 @@ state.pos = 0;
 let song = SONGS[0];
 let seq = [], blocks = [], measureLock = 0;
 let seqStart = [], seqBar = [], seqTotal = 0, seqBars = 0, seqDirty = true;
+// Abschnitts-Loop (Takte in Abspielreihenfolge, 1-basiert)
+const loop = { on: false, from: 1, to: 2 };
+const loopLo = () => seqBar.indexOf(loop.from);
+const loopHi = () => { const i = seqBar.lastIndexOf(loop.to); return i < 0 ? seq.length - 1 : i; };
+const loopActive = () => loop.on && seqBars > 0;
 function persist() {
   try {
     const { bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, stepSound, names, muted, songId } = state;
@@ -48,6 +53,7 @@ function buildSeq() {
   seqStart = []; seqBar = []; let x = 0, bar = 0;
   s.forEach((r, i) => { seqStart[i] = x; if (r.e === 0) bar++; seqBar[i] = bar; x += song.measures[r.m][r.e].dur; });
   seqTotal = x; seqBars = bar; seqDirty = true;
+  loop.from = clamp(loop.from, 1, bar); loop.to = clamp(Math.max(loop.to, loop.from), 1, bar);
   return s;
 }
 function rebuildSeq() {
@@ -148,7 +154,8 @@ function play(withCountIn = state.countIn) {
   if (listen.on) stopListening();
   ensureAudio();
   if (playing) return;
-  if (!isLoop() && state.pos >= seq.length - 1) state.pos = 0;
+  if (loopActive()) { if (state.pos < loopLo() || state.pos > loopHi()) state.pos = loopLo(); }
+  else if (!isLoop() && state.pos >= seq.length - 1) state.pos = 0;
   playing = true; queue = []; endAt = null; nextIdx = state.pos;
   let t = ctx.currentTime + 0.08;
   if (withCountIn) { const q = 2 * eighth(); for (let i = 0; i < song.beats; i++) click(t + i * q, i === 0); t += song.beats * q; }
@@ -161,7 +168,8 @@ function play(withCountIn = state.countIn) {
 function scheduler() {
   if (!playing) return;
   while (nextTime < ctx.currentTime + 0.15) {
-    if (nextIdx >= seq.length) { if (isLoop()) nextIdx = 0; else { endAt = nextTime; break; } }
+    if (loopActive() && (nextIdx > loopHi() || nextIdx >= seq.length)) nextIdx = loopLo();
+    else if (nextIdx >= seq.length) { if (isLoop()) nextIdx = 0; else { endAt = nextTime; break; } }
     const ev = evOf(seq[nextIdx]);
     playEvent(ev, nextTime);
     if (state.metro) {
@@ -452,10 +460,12 @@ function sizeLane() {
 }
 // Schritte rund um die aktuelle Position, bei Schleifen über das Ende hinaus fortgesetzt
 function eachVisible(cx, from, to, fn) {
-  const n = seq.length;
+  const lp = loopActive() && state.pos >= loopLo() && state.pos <= loopHi();
+  const lo = lp ? loopLo() : 0, hi = lp ? loopHi() : seq.length - 1, wrap = lp || isLoop();
+  const len = hi - lo + 1, span = seqStart[hi] + evOf(seq[hi]).dur - seqStart[lo];
   for (let k = state.pos - 12; k < state.pos + 80; k++) {
     let idx = k, off = 0;
-    if (k < 0 || k >= n) { if (!isLoop()) continue; idx = ((k % n) + n) % n; off = Math.floor(k / n) * seqTotal; }
+    if (k < lo || k > hi) { if (!wrap) continue; const r = k - lo; idx = lo + (((r % len) + len) % len); off = Math.floor(r / len) * span; }
     const start = seqStart[idx] + off, ev = evOf(seq[idx]);
     if (start + ev.dur < from) continue;
     if (start > to) break;
@@ -596,8 +606,37 @@ function buildSeek() {
     h += `<div class="sseg ${cls}" style="left:${a / seqTotal * 100}%;width:${(e - a) / seqTotal * 100}%"><span>${b.label}</span></div>`;
   });
   seq.forEach((r, i) => { if (i > 0 && r.e === 0) h += `<i class="stick" style="left:${seqStart[i] / seqTotal * 100}%"></i>`; });
+  h += `<div class="sloop" id="seekLoop" hidden></div>`;
   seekTrack.innerHTML = h;
+  updateLoopUI();
   seek.setAttribute("aria-valuemax", String(seqBars));
+}
+function updateLoopUI() {
+  const el = document.getElementById("seekLoop");
+  if (el) {
+    el.hidden = !loop.on;
+    const a = seqStart[loopLo()] || 0, hiI = loopHi(), b = seqStart[hiI] + evOf(seq[hiI]).dur;
+    el.style.left = (a / seqTotal * 100) + "%"; el.style.width = ((b - a) / seqTotal * 100) + "%";
+  }
+  const f = document.getElementById("loopFrom"), t = document.getElementById("loopTo");
+  if (!f) return;
+  if (f.options.length !== seqBars) {
+    let o = "";
+    for (let b = 1; b <= seqBars; b++) { const r = seq[seqBar.indexOf(b)]; o += `<option value="${b}">${b} · Teil ${sectionOf(r.m)}, Takt ${r.m + 1}</option>`; }
+    f.innerHTML = o; t.innerHTML = o;
+  }
+  f.value = loop.from; t.value = loop.to;
+  document.getElementById("tLoop").checked = loop.on;
+  document.getElementById("loopBox").classList.toggle("on", loop.on);
+}
+function setLoop(from, to, on) {
+  restartIfPlaying(() => {
+    loop.from = clamp(from, 1, seqBars); loop.to = clamp(Math.max(to, loop.from), 1, seqBars);
+    if (on !== undefined) loop.on = on;
+    if (loop.on && (state.pos < loopLo() || state.pos > loopHi())) state.pos = loopLo();
+  });
+  updateLoopUI();
+  try { localStorage.setItem("gtt-loop-" + song.id, JSON.stringify(loop)); } catch (e) {}
 }
 function updateSeek(cx) {
   const f = clamp(cx / seqTotal, 0, 1) * 100;
@@ -767,6 +806,7 @@ function listenAdvance(correct) {
   if (correct) listen.streak++; else listen.streak = 0;
   lBar.classList.remove("miss"); lBar.classList.toggle("hit", correct);
   setTimeout(() => lBar.classList.remove("hit"), 280);
+  if (loopActive() && state.pos >= loopHi()) { state.pos = loopLo(); render(); return; }
   if (state.pos >= seq.length - 1 && !isLoop()) {
     $id("lStatus").textContent = "Geschafft! Du hast das Stück bis zum Ende gespielt.";
     listen.stepT = Infinity; return;
@@ -896,6 +936,7 @@ document.querySelectorAll(".chip").forEach(ch => {
 document.addEventListener("keydown", e => {
   const t = e.target, tag = t.tagName;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!$("viewPractice") || $("viewPractice").hidden) return;   // Tastenkürzel nur im Bereich „Üben“
   if (tag === "SELECT" || (tag === "INPUT" && t.type === "range" && e.key.startsWith("Arrow"))) return;
   if (e.key === " ") { if (tag === "BUTTON") return; e.preventDefault(); toggle(); }
   else if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
@@ -906,6 +947,17 @@ document.addEventListener("keydown", e => {
   else if (e.key === "PageUp") { e.preventDefault(); jumpBar(-1); }
   else if (e.key === "Home") { e.preventDefault(); restartIfPlaying(() => { state.pos = 0; }); }
 });
+
+/* ---------- Abschnitts-Loop: Bedienung ---------- */
+$("tLoop").addEventListener("change", e => {
+  if (e.target.checked && !loop.on && (loop.from === 1 && loop.to === 2 || seqBar[state.pos] < loop.from || seqBar[state.pos] > loop.to)) {
+    const b = seqBar[state.pos]; setLoop(b, Math.min(seqBars, b + 1), true);   // Vorschlag: aktueller und nächster Takt
+  } else setLoop(loop.from, loop.to, e.target.checked);
+});
+$("loopFrom").addEventListener("change", e => { const v = +e.target.value; setLoop(v, Math.max(v, loop.to), true); });
+$("loopTo").addEventListener("change", e => { const v = +e.target.value; setLoop(Math.min(v, loop.from), v, true); });
+$("loopStartHere").addEventListener("click", () => { const b = seqBar[state.pos]; setLoop(b, Math.max(b, loop.to), true); });
+$("loopEndHere").addEventListener("click", () => { const b = seqBar[state.pos]; setLoop(Math.min(b, loop.from), b, true); });
 
 /* ---------- Start ---------- */
 function loadSong(s, initial) {
@@ -919,6 +971,7 @@ function loadSong(s, initial) {
     measureLock = 0;
     try { const p = JSON.parse(localStorage.getItem("gtt-pos-" + s.id) || "null"); if (p && p.mode === "measure") measureLock = p.m; } catch (e) {}
   }
+  try { const l = JSON.parse(localStorage.getItem("gtt-loop-" + s.id) || "null"); if (l) Object.assign(loop, l); else Object.assign(loop, { on: false, from: 1, to: 2 }); } catch (e) {}
   state.pos = 0; seq = buildSeq(); restorePos();
   laneWrap.hidden = !state.showLane;
   buildBoard(); buildTab(); sizeLane(); render();
@@ -931,4 +984,165 @@ updatePlayBtn();
 const firstSong = SONGS.find(x => x.id === saved.songId) || SONGS[0];
 songSel.value = firstSong.id;
 loadSong(firstSong, true);
+
+/* ---------- Stimmgerät ---------- */
+const STR_NAMES = ["E", "H", "G", "D", "A", "E"];   // Saite 1..6 (deutsche Notennamen)
+const NN_DE = ["C","Cis","D","Dis","E","F","Fis","G","Gis","A","B","H"];
+const tuner = { on: false, stream: null, src: null, an: null, buf: null, cmnd: null, raf: 0,
+  sel: 6, auto: true, a4: 440, hist: [], needle: 0, lastSeen: 0, okSince: 0, done: new Set() };
+try { const a = +localStorage.getItem("gtt-a4"); if (a >= 430 && a <= 450) tuner.a4 = a; } catch (e) {}
+const tnEl = id => document.getElementById(id);
+const gauge = tnEl("gauge");
+const strFreq = s => tuner.a4 * Math.pow(2, (TUNING[s - 1] - 69) / 12);
+const CENT_DEG = 1.2;   // ±50 Cent = ±60°
+
+function buildGauge() {
+  const cx = 200, cy = 214, R = 170;
+  const pt = (deg, r) => { const a = (deg - 90) * Math.PI / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; };
+  const arc = (d0, d1, r) => { const [x0, y0] = pt(d0, r), [x1, y1] = pt(d1, r); return `M${x0.toFixed(1)} ${y0.toFixed(1)} A${r} ${r} 0 0 1 ${x1.toFixed(1)} ${y1.toFixed(1)}`; };
+  let h = `<path class="arc" d="${arc(-60, 60, R)}"/><path class="zone" d="${arc(-5 * CENT_DEG, 5 * CENT_DEG, R)}"/>`;
+  for (let c = -50; c <= 50; c += 5) {
+    const major = c % 25 === 0, d = c * CENT_DEG;
+    const [x0, y0] = pt(d, R - 10), [x1, y1] = pt(d, R - (major ? 30 : 20));
+    h += `<line class="tick${major ? " major" : ""}" x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}"/>`;
+    if (major) { const [lx, ly] = pt(d, R - 46); h += `<text class="tl" x="${lx.toFixed(1)}" y="${(ly + 4).toFixed(1)}">${c > 0 ? "+" + c : c}</text>`; }
+  }
+  h += `<text class="tl" x="${pt(-60, R + 2)[0] - 4}" y="${cy + 18}">tief</text><text class="tl" x="${pt(60, R + 2)[0] + 4}" y="${cy + 18}">hoch</text>`;
+  h += `<g id="needle" transform="rotate(0 ${cx} ${cy})"><line class="needle" x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy - R + 6}"/></g><rect class="hub" x="${cx - 9}" y="${cy - 9}" width="18" height="18"/>`;
+  gauge.innerHTML = h;
+  gauge.classList.add("idle");
+}
+function buildStrings() {
+  tnEl("tnStrings").innerHTML = [6, 5, 4, 3, 2, 1].map(s =>
+    `<button class="sbtn" type="button" data-s="${s}" aria-label="Saite ${s}, ${STR_NAMES[s - 1]}"><b>${STR_NAMES[s - 1]}</b><span>${s} · ${nameOf(TUNING[s - 1]).replace(/^B/, "H")}</span></button>`).join("");
+  markStrings(null, false);
+}
+function markStrings(target, ok) {
+  tnEl("tnStrings").querySelectorAll(".sbtn").forEach(b => {
+    const s = +b.dataset.s;
+    b.classList.toggle("target", s === target);
+    b.classList.toggle("okn", s === target && ok);
+    b.classList.toggle("done", tuner.done.has(s));
+    b.setAttribute("aria-pressed", String(!tuner.auto && s === tuner.sel));
+  });
+}
+tnEl("tnStrings").addEventListener("click", e => {
+  const b = e.target.closest(".sbtn"); if (!b) return;
+  tuner.sel = +b.dataset.s; tuner.auto = false; tnEl("tnAuto").checked = false;
+  markStrings(tuner.sel, false);
+});
+tnEl("tnAuto").addEventListener("change", e => { tuner.auto = e.target.checked; markStrings(tuner.auto ? null : tuner.sel, false); });
+tnEl("tnRef").addEventListener("click", () => {
+  ensureAudio();
+  const s = tuner.auto ? (tuner.lastTarget || 6) : tuner.sel;
+  const m = TUNING[s - 1] + 12 * Math.log2(tuner.a4 / 440);
+  playNote(s, m, ctx.currentTime + 0.02, 1, false);
+});
+tnEl("tnA4").value = tuner.a4;
+tnEl("tnA4").addEventListener("change", e => {
+  const v = clamp(Math.round(+e.target.value || 440), 430, 450); e.target.value = v; tuner.a4 = v; tuner.done.clear();
+  try { localStorage.setItem("gtt-a4", String(v)); } catch (err) {}
+});
+
+async function startTuner() {
+  if (tuner.on) return true;
+  const msg = tnEl("tnMsg"); msg.hidden = true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { msg.textContent = "Dieser Browser erlaubt hier keinen Mikrofonzugriff. Öffne die Seite über https in Chrome, Safari oder Firefox."; msg.hidden = false; return false; }
+  ensureAudio();
+  try {
+    tuner.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+  } catch (e) {
+    msg.textContent = "Kein Zugriff aufs Mikrofon. Erlaube den Zugriff im Browser (Schloss-Symbol neben der Adresse) und tippe erneut auf „Mikrofon starten“.";
+    msg.hidden = false; return false;
+  }
+  tuner.src = ctx.createMediaStreamSource(tuner.stream);
+  tuner.an = ctx.createAnalyser(); tuner.an.fftSize = 4096;
+  tuner.src.connect(tuner.an);
+  tuner.buf = new Float32Array(tuner.an.fftSize); tuner.cmnd = new Float32Array(tuner.an.fftSize);
+  tuner.on = true; tuner.hist = [];
+  const b = tnEl("tnStart"); b.textContent = "Mikrofon stoppen"; b.classList.add("on");
+  tuner.raf = requestAnimationFrame(tunerLoop);
+  return true;
+}
+function stopTuner() {
+  tuner.on = false; cancelAnimationFrame(tuner.raf);
+  if (tuner.stream) tuner.stream.getTracks().forEach(t => t.stop());
+  try { tuner.src && tuner.src.disconnect(); } catch (e) {}
+  tuner.stream = tuner.src = tuner.an = null;
+  const b = tnEl("tnStart"); b.textContent = "Mikrofon starten"; b.classList.remove("on");
+  showIdle("Spiel eine leere Saite");
+}
+tnEl("tnStart").addEventListener("click", () => { tuner.on ? stopTuner() : startTuner(); });
+
+function showIdle(text) {
+  tnEl("tnName").textContent = "–"; tnEl("tnOct").textContent = "";
+  tnEl("tnCents").textContent = text; tnEl("tnHz").textContent = "";
+  const h = tnEl("tnHint"); h.textContent = ""; h.className = "thint";
+  gauge.classList.add("idle"); gauge.classList.remove("ok");
+  markStrings(tuner.auto ? null : tuner.sel, false);
+}
+function setNeedle(c) {
+  const n = gauge.querySelector("#needle"); if (!n) return;
+  n.setAttribute("transform", `rotate(${(clamp(c, -50, 50) * CENT_DEG).toFixed(2)} 200 214)`);
+}
+function tunerLoop() {
+  if (!tuner.on || !tuner.an) return;
+  const x = tuner.buf; tuner.an.getFloatTimeDomainData(x);
+  let sq = 0; for (let i = 0; i < x.length; i++) sq += x[i] * x[i];
+  const rms = Math.sqrt(sq / x.length), now = performance.now();
+  let f = null;
+  if (rms > 0.006) {
+    const p = detectPitch(x, ctx.sampleRate, tuner.cmnd);
+    if (p && p.conf > 0.85 && p.f > 60 && p.f < 1100) f = p.f;
+  }
+  if (f) {
+    tuner.lastSeen = now;
+    tuner.hist.push(f); if (tuner.hist.length > 7) tuner.hist.shift();
+    const fm = tuner.hist.slice().sort((a, b) => a - b)[tuner.hist.length >> 1];
+    // Zielsaite: automatisch die nächstliegende, sonst die gewählte
+    let s = tuner.sel;
+    if (tuner.auto) { let best = 1e9; for (let k = 1; k <= 6; k++) { const d = Math.abs(1200 * Math.log2(fm / strFreq(k))); if (d < best) { best = d; s = k; } } }
+    tuner.lastTarget = s;
+    const cents = 1200 * Math.log2(fm / strFreq(s));
+    tuner.needle += (clamp(cents, -55, 55) - tuner.needle) * 0.3;
+    setNeedle(tuner.needle);
+    const m = 69 + 12 * Math.log2(fm / tuner.a4), r = Math.round(m);
+    tnEl("tnName").textContent = NN_DE[((r % 12) + 12) % 12]; tnEl("tnOct").textContent = String(Math.floor(r / 12) - 1);
+    const cr = Math.round(cents);
+    tnEl("tnCents").textContent = (cr > 0 ? "+" : "") + cr + " Cent zu " + STR_NAMES[s - 1] + " (Saite " + s + ")";
+    tnEl("tnHz").textContent = fm.toFixed(1) + " Hz";
+    const ok = Math.abs(cents) <= 5, hint = tnEl("tnHint");
+    if (ok) { if (!tuner.okSince) tuner.okSince = now; if (now - tuner.okSince > 600) tuner.done.add(s); }
+    else tuner.okSince = 0;
+    if (ok) { hint.textContent = "Gestimmt"; hint.className = "thint ok"; }
+    else if (Math.abs(cents) > 50) { hint.textContent = cents < 0 ? "Viel zu tief: Wirbel deutlich anziehen" : "Viel zu hoch: Wirbel deutlich lockern"; hint.className = "thint " + (cents < 0 ? "low" : "high"); }
+    else { hint.textContent = cents < 0 ? "Zu tief: Wirbel etwas anziehen" : "Zu hoch: Wirbel etwas lockern"; hint.className = "thint " + (cents < 0 ? "low" : "high"); }
+    gauge.classList.remove("idle"); gauge.classList.toggle("ok", ok);
+    markStrings(s, ok);
+  } else if (now - tuner.lastSeen > 1500 && tuner.lastSeen) {
+    tuner.lastSeen = 0; tuner.hist = []; tuner.needle = 0; setNeedle(0); tuner.okSince = 0;
+    showIdle("Spiel eine leere Saite");
+  }
+  tuner.raf = requestAnimationFrame(tunerLoop);
+}
+buildGauge(); buildStrings();
+
+/* ---------- Bereiche umschalten (#ueben / #stimmgeraet) ---------- */
+function route(fromClick) {
+  const tunerView = location.hash === "#stimmgeraet";
+  tnEl("viewPractice").hidden = tunerView; tnEl("viewTuner").hidden = !tunerView;
+  tnEl("navPractice").setAttribute("aria-current", tunerView ? "false" : "page");
+  tnEl("navTuner").setAttribute("aria-current", tunerView ? "page" : "false");
+  if (tunerView) {
+    if (playing) stop(true);
+    if (listen.on) stopListening();
+    if (fromClick) startTuner();
+  } else {
+    if (tuner.on) stopTuner();
+    sizeLane(); drawFrame();
+  }
+}
+tnEl("navTuner").addEventListener("click", () => setTimeout(() => route(true), 0));
+window.addEventListener("hashchange", () => route(false));
+route(false);
 })();

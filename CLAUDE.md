@@ -8,7 +8,9 @@ UI-Sprache: Deutsch (Schweizer Schreibweise, kein ß).
 - `index.html` – Markup
 - `css/style.css` – Design-Tokens in `:root`, Hell/Dunkel-Modus
 - `js/songs.js` – alle Songdaten (`window.SONGS`)
-- `js/app.js` – Griffbrett (SVG), Tabulatur (SVG), Audio (Karplus-Strong), Wiedergabe-Engine
+- `js/app.js` – Griffbrett (SVG), Tabulatur (SVG), Audio (Karplus-Strong), Wiedergabe-Engine, Abschnitts-Loop,
+  Mithören (YIN-Tonerkennung), Stimmgerät
+- Zwei Bereiche über Reiter: `#ueben` und `#stimmgeraet` (Hash-Routing in `route()`)
 
 ## Neuen Song hinzufügen
 In `js/songs.js` ein Objekt an `window.SONGS` anhängen (siehe Lágrima als Vorlage):

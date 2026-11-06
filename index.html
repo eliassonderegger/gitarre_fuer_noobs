@@ -14,9 +14,18 @@
 </head>
 <body>
 <div class="wrap">
+  <nav class="views" aria-label="Bereiche">
+    <span class="brand">Gitarre für Noobs</span>
+    <div class="vtabs">
+      <a class="vtab" href="#ueben" id="navPractice">Üben</a>
+      <a class="vtab" href="#stimmgeraet" id="navTuner">Stimmgerät</a>
+    </div>
+  </nav>
+  <div class="stripe" aria-hidden="true"><i></i><i></i><i></i></div>
+
+  <div class="view" id="viewPractice">
   <header class="top">
     <div>
-      <div class="eyebrow">Gitarren-Tab-Trainer</div>
       <h1 id="songTitle">Lágrima</h1>
       <div class="meta" id="songMeta"></div>
     </div>
@@ -24,7 +33,6 @@
       <select id="songSel"></select>
     </label>
   </header>
-  <div class="stripe" aria-hidden="true"><i></i><i></i><i></i></div>
 
   <section class="card c-board" aria-label="Griffbrett">
     <div class="head">
@@ -73,6 +81,15 @@
       </div>
       <div class="smeta"><span id="tNow">0:00</span><span id="mNow"></span><span id="tTotal">0:00</span></div>
     </div>
+    <div class="loopbox" id="loopBox">
+      <label class="tg"><input type="checkbox" id="tLoop"><span class="tr"></span>Abschnitt loopen</label>
+      <label class="lfield" for="loopFrom">von <select id="loopFrom"></select></label>
+      <label class="lfield" for="loopTo">bis <select id="loopTo"></select></label>
+      <div class="lbtns">
+        <button class="lbtn" id="loopStartHere" type="button">Start hier</button>
+        <button class="lbtn" id="loopEndHere" type="button">Ende hier</button>
+      </div>
+    </div>
     <div class="btns">
       <button class="btn" id="bStart" aria-label="Zum Anfang" title="Zum Anfang (Pos1)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
       <button class="btn" id="bPrev" aria-label="Schritt zurück" title="Schritt zurück (←)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -120,6 +137,39 @@
     <span><kbd>↑</kbd> <kbd>↓</kbd> Tempo</span>
     <span><kbd>Pos1</kbd> Zum Anfang</span>
   </footer>
+  </div>
+
+  <div class="view" id="viewTuner" hidden>
+    <header class="top">
+      <div>
+        <h1>Stimmgerät</h1>
+        <div class="meta">Standardstimmung E A D G H E. Zupf eine leere Saite und dreh am Wirbel, bis der Zeiger in der Mitte steht.</div>
+      </div>
+    </header>
+    <section class="card c-tuner" aria-label="Stimmgerät">
+      <div class="tuner">
+        <div class="gauge-wrap">
+          <svg id="gauge" viewBox="0 0 400 236" aria-hidden="true"></svg>
+          <div class="tnote" aria-live="polite"><span id="tnName">–</span><small id="tnOct"></small></div>
+          <div class="tread"><span id="tnCents">Spiel eine leere Saite</span><span id="tnHz"></span></div>
+          <div class="thint" id="tnHint"></div>
+        </div>
+        <div class="tside">
+          <button class="tstart" id="tnStart" type="button">Mikrofon starten</button>
+          <div class="tmsg" id="tnMsg" hidden></div>
+          <div class="tcap">Saite</div>
+          <div class="strings" id="tnStrings" role="group" aria-label="Saite wählen"></div>
+          <div class="trow">
+            <label class="tg"><input type="checkbox" id="tnAuto" checked><span class="tr"></span>Saite automatisch erkennen</label>
+            <button class="lbtn" id="tnRef" type="button">Referenzton spielen</button>
+          </div>
+          <div class="trow">
+            <label class="tcal" for="tnA4">Kammerton A4 <input type="number" id="tnA4" min="430" max="450" step="1" value="440"> Hz</label>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <script src="js/songs.js"></script>
