@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Gitarre üben mit Tabulatur, Griffbrett-Anzeige, Schrittmodus, Tempo-Regler und Klang.">
+<meta name="theme-color" content="#2a1d16">
+<title>Gitarren-Tab-Trainer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a1d16'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23c65a32' stroke='%23fbf6ee' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="eyebrow">Gitarren-Tab-Trainer</div>
+      <h1 id="songTitle">Lágrima</h1>
+      <div class="meta" id="songMeta"></div>
+    </div>
+    <label class="field" for="songSel">Stück
+      <select id="songSel"></select>
+    </label>
+  </header>
+
+  <section class="card" aria-label="Griffbrett">
+    <div class="head">
+      <div class="t"><h2>Griffbrett</h2><span class="sub">Bünde 0 bis 15 · Klick auf einen Bund spielt den Ton</span></div>
+      <div class="legend" role="group" aria-label="Stimmen hören oder stummschalten">
+        <button class="chip" data-role="melody" aria-pressed="true" title="Melodie ein/aus"><i></i>Melodie</button>
+        <button class="chip" data-role="harmony" aria-pressed="true" title="Harmonie ein/aus"><i></i>Harmonie</button>
+        <button class="chip" data-role="bass" aria-pressed="true" title="Bass ein/aus"><i></i>Bass</button>
+      </div>
+    </div>
+    <div class="board-scroll" id="boardScroll"><svg id="board" viewBox="0 0 1200 322" aria-label="Gitarrengriffbrett mit den aktuellen Tönen"></svg></div>
+    <div class="now">
+      <div style="min-width:0">
+        <div class="pos" id="posLabel" aria-live="polite"></div>
+        <div class="notes" id="nowNotes"></div>
+      </div>
+      <div class="form" id="formChips" aria-label="Ablauf"></div>
+    </div>
+  </section>
+
+  <section class="card transport" aria-label="Wiedergabe">
+    <div class="btns">
+      <button class="btn" id="bStart" aria-label="Zum Anfang" title="Zum Anfang (Pos1)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+      <button class="btn" id="bPrev" aria-label="Schritt zurück" title="Schritt zurück (←)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <button class="btn play" id="bPlay" aria-label="Abspielen" title="Abspielen / Pause (Leertaste)"><svg viewBox="0 0 24 24" fill="currentColor" id="playIcon"><path d="M7 4.5v15l13-7.5z"/></svg></button>
+      <button class="btn" id="bNext" aria-label="Schritt weiter" title="Schritt weiter (→)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+    <div class="tempo">
+      <div class="row"><label class="field" for="tempo">Tempo</label><span class="pct" id="pct"></span></div>
+      <div class="row"><span class="bpm" id="bpmOut">♩ = 56</span></div>
+      <input type="range" id="tempo" min="20" max="120" step="1" value="56" aria-label="Tempo in Schlägen pro Minute">
+    </div>
+    <label class="field" for="mode">Abspielen
+      <select id="mode">
+        <option value="all">Ganzes Stück</option>
+        <option value="all-loop">Ganzes Stück, endlos</option>
+        <option value="A">Nur Teil A, Schleife</option>
+        <option value="B">Nur Teil B, Schleife</option>
+        <option value="measure">Aktueller Takt, Schleife</option>
+      </select>
+    </label>
+    <div class="toggles">
+      <label class="tg"><input type="checkbox" id="tRepeats" checked><span class="tr"></span>Wiederholungen</label>
+      <label class="tg"><input type="checkbox" id="tMetro"><span class="tr"></span>Metronom</label>
+      <label class="tg"><input type="checkbox" id="tCount" checked><span class="tr"></span>Einzählen</label>
+      <label class="tg"><input type="checkbox" id="tNext" checked><span class="tr"></span>Nächsten Griff zeigen</label>
+      <label class="tg"><input type="checkbox" id="tRing" checked><span class="tr"></span>Klingende Töne zeigen</label>
+      <label class="tg"><input type="checkbox" id="tNames" checked><span class="tr"></span>Tonnamen</label>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Tabulatur">
+    <div class="head">
+      <div class="t"><h2>Tabulatur</h2><span class="sub">Zahl = Bund, oberste Linie = hohe E-Saite · Klick springt an die Stelle · s Slide · h Hammer-on · p Pull-off</span></div>
+    </div>
+    <div class="tab" id="tab"></div>
+  </section>
+
+  <footer class="keys">
+    <span><kbd>Leertaste</kbd> Abspielen / Pause</span>
+    <span><kbd>←</kbd> <kbd>→</kbd> Schritt für Schritt</span>
+    <span><kbd>↑</kbd> <kbd>↓</kbd> Tempo</span>
+    <span><kbd>Pos1</kbd> Zum Anfang</span>
+  </footer>
+</div>
+
+<script src="js/songs.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
