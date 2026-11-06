@@ -20,11 +20,6 @@ state.pos = 0;
 let song = SONGS[0];
 let seq = [], blocks = [], measureLock = 0;
 let seqStart = [], seqBar = [], seqTotal = 0, seqBars = 0, seqDirty = true;
-// Abschnitts-Loop (Takte in Abspielreihenfolge, 1-basiert)
-const loop = { on: false, from: 1, to: 2 };
-const loopLo = () => seqBar.indexOf(loop.from);
-const loopHi = () => { const i = seqBar.lastIndexOf(loop.to); return i < 0 ? seq.length - 1 : i; };
-const loopActive = () => loop.on && seqBars > 0;
 function persist() {
   try {
     const { bpm, mode, repeats, metro, countIn, showNext, showRing, showLane, stepSound, names, muted, songId } = state;
@@ -53,7 +48,6 @@ function buildSeq() {
   seqStart = []; seqBar = []; let x = 0, bar = 0;
   s.forEach((r, i) => { seqStart[i] = x; if (r.e === 0) bar++; seqBar[i] = bar; x += song.measures[r.m][r.e].dur; });
   seqTotal = x; seqBars = bar; seqDirty = true;
-  loop.from = clamp(loop.from, 1, bar); loop.to = clamp(Math.max(loop.to, loop.from), 1, bar);
   return s;
 }
 function rebuildSeq() {
@@ -154,8 +148,7 @@ function play(withCountIn = state.countIn) {
   if (listen.on) stopListening();
   ensureAudio();
   if (playing) return;
-  if (loopActive()) { if (state.pos < loopLo() || state.pos > loopHi()) state.pos = loopLo(); }
-  else if (!isLoop() && state.pos >= seq.length - 1) state.pos = 0;
+  if (!isLoop() && state.pos >= seq.length - 1) state.pos = 0;
   playing = true; queue = []; endAt = null; nextIdx = state.pos;
   let t = ctx.currentTime + 0.08;
   if (withCountIn) { const q = 2 * eighth(); for (let i = 0; i < song.beats; i++) click(t + i * q, i === 0); t += song.beats * q; }
@@ -168,8 +161,7 @@ function play(withCountIn = state.countIn) {
 function scheduler() {
   if (!playing) return;
   while (nextTime < ctx.currentTime + 0.15) {
-    if (loopActive() && (nextIdx > loopHi() || nextIdx >= seq.length)) nextIdx = loopLo();
-    else if (nextIdx >= seq.length) { if (isLoop()) nextIdx = 0; else { endAt = nextTime; break; } }
+    if (nextIdx >= seq.length) { if (isLoop()) nextIdx = 0; else { endAt = nextTime; break; } }
     const ev = evOf(seq[nextIdx]);
     playEvent(ev, nextTime);
     if (state.metro) {
@@ -460,8 +452,7 @@ function sizeLane() {
 }
 // Schritte rund um die aktuelle Position, bei Schleifen über das Ende hinaus fortgesetzt
 function eachVisible(cx, from, to, fn) {
-  const lp = loopActive() && state.pos >= loopLo() && state.pos <= loopHi();
-  const lo = lp ? loopLo() : 0, hi = lp ? loopHi() : seq.length - 1, wrap = lp || isLoop();
+  const lo = 0, hi = seq.length - 1, wrap = isLoop();
   const len = hi - lo + 1, span = seqStart[hi] + evOf(seq[hi]).dur - seqStart[lo];
   for (let k = state.pos - 12; k < state.pos + 80; k++) {
     let idx = k, off = 0;
@@ -606,37 +597,8 @@ function buildSeek() {
     h += `<div class="sseg ${cls}" style="left:${a / seqTotal * 100}%;width:${(e - a) / seqTotal * 100}%"><span>${b.label}</span></div>`;
   });
   seq.forEach((r, i) => { if (i > 0 && r.e === 0) h += `<i class="stick" style="left:${seqStart[i] / seqTotal * 100}%"></i>`; });
-  h += `<div class="sloop" id="seekLoop" hidden></div>`;
   seekTrack.innerHTML = h;
-  updateLoopUI();
   seek.setAttribute("aria-valuemax", String(seqBars));
-}
-function updateLoopUI() {
-  const el = document.getElementById("seekLoop");
-  if (el) {
-    el.hidden = !loop.on;
-    const a = seqStart[loopLo()] || 0, hiI = loopHi(), b = seqStart[hiI] + evOf(seq[hiI]).dur;
-    el.style.left = (a / seqTotal * 100) + "%"; el.style.width = ((b - a) / seqTotal * 100) + "%";
-  }
-  const f = document.getElementById("loopFrom"), t = document.getElementById("loopTo");
-  if (!f) return;
-  if (f.options.length !== seqBars) {
-    let o = "";
-    for (let b = 1; b <= seqBars; b++) { const r = seq[seqBar.indexOf(b)]; o += `<option value="${b}">${b} · Teil ${sectionOf(r.m)}, Takt ${r.m + 1}</option>`; }
-    f.innerHTML = o; t.innerHTML = o;
-  }
-  f.value = loop.from; t.value = loop.to;
-  document.getElementById("tLoop").checked = loop.on;
-  document.getElementById("loopBox").classList.toggle("on", loop.on);
-}
-function setLoop(from, to, on) {
-  restartIfPlaying(() => {
-    loop.from = clamp(from, 1, seqBars); loop.to = clamp(Math.max(to, loop.from), 1, seqBars);
-    if (on !== undefined) loop.on = on;
-    if (loop.on && (state.pos < loopLo() || state.pos > loopHi())) state.pos = loopLo();
-  });
-  updateLoopUI();
-  try { localStorage.setItem("gtt-loop-" + song.id, JSON.stringify(loop)); } catch (e) {}
 }
 function updateSeek(cx) {
   const f = clamp(cx / seqTotal, 0, 1) * 100;
@@ -806,7 +768,6 @@ function listenAdvance(correct) {
   if (correct) listen.streak++; else listen.streak = 0;
   lBar.classList.remove("miss"); lBar.classList.toggle("hit", correct);
   setTimeout(() => lBar.classList.remove("hit"), 280);
-  if (loopActive() && state.pos >= loopHi()) { state.pos = loopLo(); render(); return; }
   if (state.pos >= seq.length - 1 && !isLoop()) {
     $id("lStatus").textContent = "Geschafft! Du hast das Stück bis zum Ende gespielt.";
     listen.stepT = Infinity; return;
@@ -948,17 +909,6 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Home") { e.preventDefault(); restartIfPlaying(() => { state.pos = 0; }); }
 });
 
-/* ---------- Abschnitts-Loop: Bedienung ---------- */
-$("tLoop").addEventListener("change", e => {
-  if (e.target.checked && !loop.on && (loop.from === 1 && loop.to === 2 || seqBar[state.pos] < loop.from || seqBar[state.pos] > loop.to)) {
-    const b = seqBar[state.pos]; setLoop(b, Math.min(seqBars, b + 1), true);   // Vorschlag: aktueller und nächster Takt
-  } else setLoop(loop.from, loop.to, e.target.checked);
-});
-$("loopFrom").addEventListener("change", e => { const v = +e.target.value; setLoop(v, Math.max(v, loop.to), true); });
-$("loopTo").addEventListener("change", e => { const v = +e.target.value; setLoop(Math.min(v, loop.from), v, true); });
-$("loopStartHere").addEventListener("click", () => { const b = seqBar[state.pos]; setLoop(b, Math.max(b, loop.to), true); });
-$("loopEndHere").addEventListener("click", () => { const b = seqBar[state.pos]; setLoop(Math.min(b, loop.from), b, true); });
-
 /* ---------- Start ---------- */
 function loadSong(s, initial) {
   song = s; state.songId = s.id;
@@ -971,7 +921,6 @@ function loadSong(s, initial) {
     measureLock = 0;
     try { const p = JSON.parse(localStorage.getItem("gtt-pos-" + s.id) || "null"); if (p && p.mode === "measure") measureLock = p.m; } catch (e) {}
   }
-  try { const l = JSON.parse(localStorage.getItem("gtt-loop-" + s.id) || "null"); if (l) Object.assign(loop, l); else Object.assign(loop, { on: false, from: 1, to: 2 }); } catch (e) {}
   state.pos = 0; seq = buildSeq(); restorePos();
   laneWrap.hidden = !state.showLane;
   buildBoard(); buildTab(); sizeLane(); render();

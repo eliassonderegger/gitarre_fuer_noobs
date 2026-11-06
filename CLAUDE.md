@@ -8,7 +8,7 @@ UI-Sprache: Deutsch (Schweizer Schreibweise, kein ß).
 - `index.html` – Markup
 - `css/style.css` – Design-Tokens in `:root`, Hell/Dunkel-Modus
 - `js/songs.js` – alle Songdaten (`window.SONGS`)
-- `js/app.js` – Griffbrett (SVG), Tabulatur (SVG), Audio (Karplus-Strong), Wiedergabe-Engine, Abschnitts-Loop,
+- `js/app.js` – Griffbrett (SVG), Tabulatur (SVG), Audio (Karplus-Strong), Wiedergabe-Engine,
   Mithören (YIN-Tonerkennung), Stimmgerät
 - Zwei Bereiche über Reiter: `#ueben` und `#stimmgeraet` (Hash-Routing in `route()`)
 

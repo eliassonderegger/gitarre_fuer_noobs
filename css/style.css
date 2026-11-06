@@ -164,15 +164,6 @@ input[type=range]{width:100%;accent-color:var(--melody)}
 .keys{color:var(--muted);font-size:13px;display:flex;flex-wrap:wrap;gap:6px 18px}
 kbd{font:600 11.5px var(--f-mono);border:1px solid var(--line);border-bottom-width:2px;border-radius:0;padding:1px 6px;background:var(--card);color:var(--ink)}
 :focus-visible{outline:2px solid var(--melody);outline-offset:2px}
-/* Abschnitts-Loop */
-.loopbox{width:100%;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:10px 12px;border:1.5px dashed var(--line)}
-.loopbox.on{border-style:solid;border-color:var(--bass);background:color-mix(in srgb,var(--bass) 12%,transparent)}
-.lfield{display:flex;align-items:center;gap:6px;font-size:14px;color:var(--muted);min-width:0}
-.lfield select{font-size:14px;padding:6px 8px;border-radius:0;max-width:220px}
-.lbtns{display:flex;gap:6px;margin-left:auto}
-.lbtns .lbtn{font-size:13px;padding:6px 10px}
-.sloop{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--bass) 38%,transparent);border-left:3px solid var(--bass);border-right:3px solid var(--bass);pointer-events:none}
-
 /* Bereiche (Üben / Stimmgerät) */
 .views{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:10px 20px}
 .brand{font-weight:600;font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted)}
